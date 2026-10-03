@@ -11,7 +11,6 @@ import {
   Landmark,
   Settings2,
   LogOut,
-  ShieldCheck,
   SlidersHorizontal,
   ChevronLeft,
   ChevronRight,
@@ -190,7 +189,6 @@ export default function ExpenseApp() {
         >
           <X />
         </button>
-        <div className="workspace-label">PERSONAL FINANCE</div>
         <nav>
           {navigation.map((item, i) => (
             <button
@@ -207,17 +205,10 @@ export default function ExpenseApp() {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="privacy-note">
-            <ShieldCheck size={18} />
-            <span>
-              Your personal workspace<small>Only you have access</small>
-            </span>
-          </div>
           <div className="owner">
             <span className="owner-avatar">{initials(state.data.owner)}</span>
             <span>
               <strong>{state.data.owner}</strong>
-              <small>Personal account</small>
             </span>
             <button
               className="icon-button"
@@ -234,59 +225,23 @@ export default function ExpenseApp() {
         </div>
       </aside>
       <div className="main-wrap">
-        <header className="topbar">
-          <div className="topbar-title">
-            <button
-              className="mobile-menu icon-button"
-              aria-label="Open navigation"
-              onClick={() => setMobile(true)}
-            >
-              <Menu size={21} />
-            </button>
-            <span>{title}</span>
-            <span className="topbar-divider">/</span>
-            <span className="muted">Personal workspace</span>
-          </div>
-          <div className="topbar-end">
-            <span className="local-badge">
-              <i />
-              Private
-            </span>
-            <span className="topbar-avatar">{initials(state.data.owner)}</span>
-          </div>
-        </header>
         <main>
           <div className="page-heading">
-            <div>
-              <div className="eyebrow">
-                {active === "overview"
-                  ? "A LITTLE CLARITY, EVERY DAY"
-                  : "YOUR PERSONAL FINANCES"}
-              </div>
+            <div className="page-title">
+              <button
+                className="mobile-menu icon-button"
+                aria-label="Open navigation"
+                onClick={() => setMobile(true)}
+              >
+                <Menu size={21} />
+              </button>
               <h1>
-                {active === "overview"
-                  ? "Your money, at a glance."
-                  : path.length > 1
-                    ? active === "receipts"
-                      ? "Receipt details"
-                      : "Transaction details"
-                    : title}
+                {path.length > 1
+                  ? active === "receipts"
+                    ? "Receipt details"
+                    : "Transaction details"
+                  : title}
               </h1>
-              <p>
-                {active === "overview"
-                  ? "See where it goes. Make room for what matters."
-                  : active === "receipts"
-                    ? "Turn your receipts into a clearer picture of your spending."
-                    : active === "connections"
-                      ? "All your accounts, together in one private place."
-                      : active === "review"
-                        ? "A few thoughtful corrections keep your overview accurate."
-                        : active === "rules"
-                          ? "Teach your tracker how you like to organize things."
-                          : active === "settings"
-                            ? "Make this workspace yours."
-                            : "Every payment, with the details that explain it."}
-              </p>
             </div>
             <div className="page-controls">
               <select
@@ -339,10 +294,6 @@ export default function ExpenseApp() {
           {active === "rules" && <RulesView context={context} />}
           {active === "settings" && <SettingsView context={context} />}
         </main>
-        <footer className="app-footer">
-          <ShieldCheck size={13} /> Private by design <span>·</span> Amounts
-          shown in {currency} <span>·</span> Europe/Tallinn
-        </footer>
       </div>
       {toast && (
         <div className="toast" role="status">
@@ -402,58 +353,12 @@ function AuthScreen({ setup, onDone }: { setup: boolean; onDone: () => void }) {
   };
   return (
     <div className="auth-page">
-      <div className="auth-story">
-        <Brand />
-        <div>
-          <span className="eyebrow">A HOME FOR YOUR FINANCES</span>
-          <h1>
-            A clearer view.
-            <br />A calmer everyday.
-          </h1>
-          <p>
-            Your accounts and receipts, thoughtfully brought together. Built for
-            one person: you.
-          </p>
-          <div className="auth-illustration">
-            <div className="illustration-card">
-              <span className="illustration-icon">
-                <ReceiptText />
-              </span>
-              <div>
-                <strong>Every little detail.</strong>
-                <span>One complete picture.</span>
-              </div>
-              <CheckCheck />
-            </div>
-            <div className="illustration-lines">
-              <i />
-              <i />
-              <i />
-              <i />
-              <i />
-              <i />
-            </div>
-          </div>
-        </div>
-        <p className="auth-privacy">
-          <ShieldCheck size={16} />
-          Your data stays in your personal workspace.
-        </p>
-      </div>
       <div className="auth-form-wrap">
-        <div className="auth-mobile-brand">
+        <div className="auth-brand">
           <Brand />
         </div>
         <form onSubmit={submit} className="auth-form">
-          <span className="eyebrow">
-            {setup ? "MAKE YOURSELF AT HOME" : "GOOD TO SEE YOU"}
-          </span>
-          <h2>{setup ? "Create your owner account" : "Welcome back."}</h2>
-          <p>
-            {setup
-              ? "Choose the password you’ll use on your phone and computer."
-              : "Sign in to your personal expense tracker."}
-          </p>
+          <h1>{setup ? "Create account" : "Sign in"}</h1>
           <ErrorMessage message={error} />
           {setup && !token && (
             <div className="notice">
@@ -509,12 +414,9 @@ function AuthScreen({ setup, onDone }: { setup: boolean; onDone: () => void }) {
             className="button primary wide"
             disabled={busy || (setup && !token)}
           >
-            {busy ? "One moment…" : setup ? "Create my workspace" : "Sign in"}
+            {busy ? "Submitting…" : setup ? "Create account" : "Sign in"}
             <ArrowUpRight size={17} />
           </button>
-          <p className="auth-small">
-            <ShieldCheck size={14} /> Single owner. Private access.
-          </p>
         </form>
       </div>
     </div>
@@ -603,10 +505,8 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
             <Landmark size={25} />
           </div>
           <div>
-            <strong>A fresh start for your finances.</strong>
-            <p>
-              Connect LHV, SEB, or Revolut to bring your payments into view.
-            </p>
+            <strong>No bank connected</strong>
+            <p>Connect a bank to import transactions.</p>
           </div>
           <button
             className="button primary"
@@ -683,10 +583,7 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
         </div>
       </div>
       <section className="panel contributions-panel">
-        <SectionTitle
-          title="Money set aside"
-          description="Investment and pension contributions from your bank transactions"
-        />
+        <SectionTitle title="Investments and pensions" />
         <div className="metric-grid contribution-grid">
           {(
             [
@@ -766,11 +663,10 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
       <div className="overview-grid">
         <section className="panel category-panel">
           <SectionTitle
-            title="Where it goes"
-            description="Spending by category"
+            title="Spending by category"
             action={
               <TextLink onClick={() => ctx.navigate("/transactions")}>
-                Explore
+                View transactions
               </TextLink>
             }
           />
@@ -831,15 +727,15 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
             </>
           ) : (
             <Empty
-              title="A picture worth building"
-              text="Your category breakdown will appear when you import your first expenses."
+              title="No spending this month"
+              text="Import transactions or add a cash expense to see spending by category."
             />
           )}
         </section>
         <section className="panel trend-panel">
           <SectionTitle
-            title="The bigger picture"
-            description="Your spending over the last six months"
+            title="Spending and income"
+            description="Last six months"
             action={<Badge>{ctx.currency}</Badge>}
           />
           {data.trend.some((point) => point.spending || point.income) ? (
@@ -882,8 +778,8 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
             </div>
           ) : (
             <Empty
-              title="Your story starts here"
-              text="As payments arrive, you’ll see how your spending changes from month to month."
+              title="No transactions in the last six months"
+              text="Connect a bank or add a cash entry to see monthly totals."
             />
           )}
           <div className="chart-key">
@@ -897,10 +793,6 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
             </span>
           </div>
           <div className="insight-strip">
-            <div>
-              <CircleHelp size={18} />
-              <span>Keep the whole picture in view.</span>
-            </div>
             <p>
               {data.uncategorized.count
                 ? `${data.uncategorized.count} payments still need a category. They’re included in your spending total.`
@@ -911,10 +803,7 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
       </div>
       <div className="overview-grid lower">
         <section className="panel">
-          <SectionTitle
-            title="Your regular places"
-            description="Largest merchants this month"
-          />
+          <SectionTitle title="Top merchants" />
           {data.merchants.length ? (
             <div className="merchant-list">
               {data.merchants.map((merchant, i) => (
@@ -945,10 +834,7 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
           )}
         </section>
         <section className="panel attention-panel">
-          <SectionTitle
-            title="A little attention"
-            description="The details that make the difference"
-          />
+          <SectionTitle title="Needs review" />
           <div className="attention-list">
             <button onClick={() => ctx.navigate("/review")}>
               <span className="attention-icon">
@@ -987,7 +873,7 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
             {data.cash.amount > 0 && (
               <div className="notice">
                 {fmt(data.cash.amount)} in cash withdrawals remains unallocated.
-                Add your cash purchases to complete the picture.
+                Record cash purchases to allocate it.
               </div>
             )}
           </div>
@@ -995,8 +881,7 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
       </div>
       <section className="panel">
         <SectionTitle
-          title="Recent activity"
-          description="A closer look at the latest payments"
+          title="Recent transactions"
           action={
             <TextLink onClick={() => ctx.navigate("/transactions")}>
               All transactions
@@ -1007,7 +892,7 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
           <EntryTable entries={data.recent} navigate={ctx.navigate} />
         ) : (
           <Empty
-            title="Your first payment is the beginning"
+            title="No transactions this month"
             text="Connect a bank or record a cash expense to get started."
           >
             <button

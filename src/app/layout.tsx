@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 export const metadata: Metadata = {
-  title: "Expenses · Your personal finances",
-  description: "Your private expense tracker",
+  title: "Expenses",
+  description: "Transactions, receipts, and spending",
   robots: { index: false, follow: false },
 };
 export default function RootLayout({

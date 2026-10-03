@@ -13,9 +13,9 @@ test("owner setup, cash ledger, receipt corrections and mobile overview", async 
   await page.getByLabel("Your name").fill("Test owner");
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByLabel("Confirm password").fill(password);
-  await page.getByRole("button", { name: "Create my workspace" }).click();
+  await page.getByRole("button", { name: "Create account" }).click();
   await expect(
-    page.getByRole("heading", { name: "Your money, at a glance." }),
+    page.getByRole("heading", { name: "Overview", exact: true }),
   ).toBeVisible();
   const today = new Intl.DateTimeFormat("sv-SE", {
     timeZone: "Europe/Tallinn",
@@ -242,7 +242,7 @@ test("investment and pension classifications update the overview and fit a phone
   await page.getByLabel("Currency", { exact: true }).selectOption("GBP");
   const section = page.locator(".contributions-panel");
   await expect(
-    section.getByRole("heading", { name: "Money set aside" }),
+    section.getByRole("heading", { name: "Investments and pensions" }),
   ).toBeVisible();
   await expect(section.locator(".metric-value").nth(0)).toHaveText("£100.00");
   await expect(section.locator(".metric-value").nth(1)).toHaveText("£50.00");

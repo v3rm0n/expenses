@@ -220,7 +220,7 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
           <EntryTable entries={data.rows} navigate={ctx.navigate} />
         ) : (
           <Empty
-            title="Nothing here just yet"
+            title="No matching transactions"
             text="Adjust your filters, connect a bank, or add a cash expense."
           />
         )}
@@ -660,10 +660,7 @@ export function TransactionDetailView({
           </form>
         </section>
         <aside className="panel">
-          <SectionTitle
-            title="Receipts"
-            description="Details behind this payment"
-          />
+          <SectionTitle title="Receipts" />
           {data.receipts?.length ? (
             <div className="linked-list">
               {data.receipts.map((receipt) => (
@@ -765,7 +762,7 @@ export function ReceiptsView({ context: ctx }: { context: AppContext }) {
           <Upload size={26} strokeWidth={1.5} />
         </div>
         <div>
-          <h2>A little more detail, a lot more clarity.</h2>
+          <h2>Import receipts</h2>
           <p>
             Drop your receipts here or choose files. PDF, PNG, JPEG, CSV, TXT
             and forwarded EML emails.
@@ -818,8 +815,7 @@ export function ReceiptsView({ context: ctx }: { context: AppContext }) {
       <ErrorMessage message={uploadError || error} />
       <section className="panel">
         <SectionTitle
-          title="Your receipt collection"
-          description="Original documents, products, and their linked payments"
+          title="Imported receipts"
           action={
             <select
               aria-label="Filter retailer"
@@ -842,16 +838,16 @@ export function ReceiptsView({ context: ctx }: { context: AppContext }) {
           <ReceiptTable receipts={receipts} context={ctx} />
         ) : (
           <Empty
-            title="Keep the details that matter"
-            text="Download or share a receipt from Rimi, Partnerkaart, Coop, or Lidl, then import it here."
+            title="No matching receipts"
+            text="Import receipt files or select another retailer."
           />
         )}
       </section>
       <div className="notice subtle">
         <ReceiptText size={18} />
         <span>
-          Receipt totals enrich bank payments. They’re only counted as a
-          separate expense when you explicitly record a cash purchase.
+          Linked receipts do not add to spending. Record a cash payment to count
+          an unlinked receipt as an expense.
         </span>
       </div>
     </div>
@@ -1303,7 +1299,7 @@ export function ReceiptDetailView({
                   </div>
                 ) : (
                   <Empty
-                    title="Add the details"
+                    title="Receipt details missing"
                     text="Open the original receipt, then edit the date, total, and product lines."
                   />
                 )}
@@ -1317,10 +1313,7 @@ export function ReceiptDetailView({
         </section>
         <aside className="view-stack">
           <section className="panel">
-            <SectionTitle
-              title="Connect the payment"
-              description="A purchase is counted once, with the receipt adding detail."
-            />
+            <SectionTitle title="Link payment" />
             <div className="padded-form">
               {data.links.map((link) => (
                 <div className="payment-link" key={link.transaction_id}>
@@ -1470,10 +1463,7 @@ export function ReceiptDetailView({
             </div>
           </section>
           <section className="panel">
-            <SectionTitle
-              title="Original receipt"
-              description="Your document is kept in private storage."
-            />
+            <SectionTitle title="Original receipt" />
             <div className="padded-form">
               {data.content_type.startsWith("image/") && (
                 <img
@@ -1537,8 +1527,8 @@ export function ReviewView({ context: ctx }: { context: AppContext }) {
         !data.emails.length && (
           <section className="panel">
             <Empty
-              title="All caught up."
-              text="Your imported expenses are categorized and your receipts are linked. New items will appear here when they need attention."
+              title="Nothing to review"
+              text="Uncategorized transactions, unlinked receipts, and failed imports appear here."
             />
           </section>
         )}

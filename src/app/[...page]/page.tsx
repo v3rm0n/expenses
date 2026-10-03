@@ -22,7 +22,7 @@ export default async function Page({
   )
     notFound();
   return (
-    <Suspense fallback={<div className="loading">Opening your workspace…</div>}>
+    <Suspense fallback={<div className="loading">Loading…</div>}>
       <ExpenseApp />
     </Suspense>
   );

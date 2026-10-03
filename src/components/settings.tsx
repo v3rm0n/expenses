@@ -109,21 +109,9 @@ export function ConnectionsView({ context: ctx }: { context: AppContext }) {
           actionError || search.get("error") || banks.error || connections.error
         }
       />
-      <div className="notice">
-        <ShieldCheck size={20} />
-        <span>
-          To connect a bank, open{" "}
-          <a href={ctx.state.appUrl}>{ctx.state.appUrl}</a> after your reverse
-          proxy is ready. Bank authorization returns to its registered HTTPS
-          callback.
-        </span>
-      </div>
       {(connections.data?.length || 0) > 0 && (
         <section className="panel">
-          <SectionTitle
-            title="Connected banks"
-            description="Daily synchronization, with manual refresh when you need it."
-          />
+          <SectionTitle title="Connected banks" />
           <div className="connection-grid">
             {connections.data!.map((connection) => {
               const days = Math.ceil(
@@ -212,10 +200,7 @@ export function ConnectionsView({ context: ctx }: { context: AppContext }) {
       )}
       {ctx.state.accounts.some((a) => a.source === "bank") && (
         <section className="panel">
-          <SectionTitle
-            title="Your accounts"
-            description="Transaction currencies are preserved, including Revolut wallets."
-          />
+          <SectionTitle title="Accounts" />
           <div className="account-grid">
             {ctx.state.accounts
               .filter((a) => a.source === "bank")
@@ -263,7 +248,6 @@ export function ConnectionsView({ context: ctx }: { context: AppContext }) {
       <section className="panel">
         <SectionTitle
           title="Add a bank"
-          description="LHV, SEB, and Revolut are shown first when available."
           action={
             <select
               aria-label="Bank country"
@@ -310,12 +294,7 @@ export function ConnectionsView({ context: ctx }: { context: AppContext }) {
                 </span>
                 <span>
                   <strong>{bank.name}</strong>
-                  <small>
-                    {bank.country} ·{" "}
-                    {preferred.test(bank.name)
-                      ? "Your preferred bank"
-                      : "Personal accounts"}
-                  </small>
+                  <small>{bank.country}</small>
                 </span>
                 <ArrowUpRight size={18} />
               </button>
@@ -393,14 +372,14 @@ export function RulesView({ context: ctx }: { context: AppContext }) {
       <div className="notice subtle">
         <ShieldCheck size={18} />
         <span>
-          Your manual corrections always win. Rules apply next, followed by
+          Manual corrections take priority. Rules apply next, followed by
           receipt details and merchant suggestions.
         </span>
       </div>
       <div className="detail-grid">
         <section className="panel">
           <SectionTitle
-            title="Your rules"
+            title="Saved rules"
             description="Lower priority numbers run first."
             action={
               <button
@@ -474,7 +453,7 @@ export function RulesView({ context: ctx }: { context: AppContext }) {
             <Loading />
           ) : (
             <Empty
-              title="Teach it your way"
+              title="No rules yet"
               text="Create a rule for a merchant, payment description, or receipt product. Corrections can also remember product categories."
             />
           )}
@@ -717,7 +696,7 @@ export function SettingsView({ context: ctx }: { context: AppContext }) {
         <section className="panel">
           <SectionTitle
             title="Receipt email bridge"
-            description="A free receiving address with Cloudflare Email Routing."
+            description="Forward receipts with Cloudflare Email Routing."
           />
           <div className="padded-form">
             <p className="muted">
@@ -864,10 +843,7 @@ export function SettingsView({ context: ctx }: { context: AppContext }) {
       </section>
       <div className="settings-grid">
         <section className="panel">
-          <SectionTitle
-            title="Categories"
-            description="Rename, recolor, or add your own."
-          />
+          <SectionTitle title="Categories" />
           <div className="category-edit-list">
             {ctx.state.categories.map((category) => (
               <CategoryEditor
@@ -886,7 +862,7 @@ export function SettingsView({ context: ctx }: { context: AppContext }) {
           />
           <PasswordForm context={ctx} />
           <div className="export-options">
-            <h3>Your data, when you need it</h3>
+            <h3>Export data</h3>
             <p>
               Download expenses, category allocations, or individual receipt
               products.
