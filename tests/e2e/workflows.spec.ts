@@ -71,6 +71,11 @@ test("owner setup, cash ledger, receipt corrections and mobile overview", async 
   await expect(
     page.getByText("This receipt is fully accounted for."),
   ).toBeVisible();
+  await page.goto("/receipts?retailer=rimi&page=1");
+  await page.getByRole("button", { name: /Rimi.*rimi.txt/ }).click();
+  await page.getByRole("button", { name: "All receipts", exact: true }).click();
+  await expect(page).toHaveURL(/\/receipts\?retailer=rimi&page=1$/);
+  await expect(page.getByLabel("Filter retailer")).toHaveValue("rimi");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Receipt email bridge" }),
@@ -266,4 +271,114 @@ test("investment and pension classifications update the overview and fit a phone
     "investment",
   );
   await expect(page.getByRole("button", { name: /Test broker/ })).toBeVisible();
+});
+
+test("filters survive detail navigation, CSV matches results, and mobile amounts stay visible", async ({
+  page,
+}) => {
+  const headers = { Origin: "http://127.0.0.1:4318" };
+  await page.request.post("/api/auth/login", { data: { password }, headers });
+  const today = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Europe/Tallinn",
+  }).format(new Date());
+  const prefix = `Filter regression ${randomUUID().slice(0, 8)}`;
+  for (let i = 0; i < 54; i++) {
+    const response = await page.request.post("/api/transactions", {
+      headers,
+      data: {
+        merchant: `${prefix} ${i}`,
+        amount: i === 52 ? "90.00" : "10.00",
+        currency: "CHF",
+        date: today,
+        category: i === 53 ? "gifts" : "groceries",
+        kind: "expense",
+        idempotencyKey: randomUUID(),
+      },
+    });
+    expect(response.status()).toBe(201);
+  }
+  await page.goto(`/transactions?month=${today.slice(0, 7)}&currency=CHF`);
+  await page.getByRole("button", { name: "All history", exact: true }).click();
+  await expect(page.getByLabel("Month", { exact: true })).toHaveCount(0);
+  await page.getByLabel("Search transactions").fill(prefix);
+  await page.getByLabel("Filter category").selectOption("groceries");
+  const account = await page
+    .getByLabel("Filter account")
+    .locator("option")
+    .filter({ hasText: "Cash" })
+    .evaluateAll((options) =>
+      options
+        .find((option) => option.textContent?.includes("CHF"))
+        ?.getAttribute("value"),
+    );
+  expect(account).toBeTruthy();
+  await page.getByLabel("Filter account").selectOption(account!);
+  await page.getByLabel("Filter payment type").selectOption("expense");
+  await page.getByLabel("Filter receipt status").selectOption("missing");
+  await page.getByLabel("Filter booking status").selectOption("BOOK");
+  await page.getByLabel("Minimum amount").fill("9");
+  await page.getByLabel("Maximum amount").fill("11");
+  await expect(page.locator(".pagination")).toContainText("of 52");
+  await page.getByRole("button", { name: "Next page", exact: true }).click();
+  await expect(page.locator(".pagination")).toContainText("Page 2");
+  const listUrl = page.url();
+  const exportUrl = await page
+    .getByRole("link", { name: "Export CSV" })
+    .getAttribute("href");
+  const exported = await page.request.get(exportUrl!);
+  expect(exported.status()).toBe(200);
+  const csv = await exported.text();
+  expect(csv.trim().split("\n")).toHaveLength(53);
+  expect(csv).not.toContain(`"${prefix} 52"`);
+  expect(csv).not.toContain(`"${prefix} 53"`);
+  await page.locator(".entry-table .merchant-link").first().click();
+  await expect(page.getByLabel("Currency", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Month", { exact: true })).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "All transactions", exact: true })
+    .click();
+  await expect(page).toHaveURL(listUrl);
+  await expect(page.locator(".pagination")).toContainText("Page 2");
+  await expect(page.getByLabel("Search transactions")).toHaveValue(prefix);
+  await expect(page.getByLabel("Filter account")).toHaveValue(account!);
+  await expect(page.getByLabel("Maximum amount")).toHaveValue("11");
+  await page.reload();
+  await expect(page.locator(".pagination")).toContainText("Page 2");
+  await page.locator(".entry-table .merchant-link").first().click();
+  await expect(
+    page.getByRole("heading", { name: "Transaction details", exact: true }),
+  ).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(listUrl);
+  await expect(page.locator(".pagination")).toContainText("Page 2");
+  await page.setViewportSize({ width: 390, height: 844 });
+  const amounts = await page
+    .locator(".entry-table .entry-amount")
+    .evaluateAll((elements) =>
+      elements.map((element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, width: rect.width };
+      }),
+    );
+  expect(amounts.length).toBe(2);
+  expect(
+    amounts.every(
+      (rect) => rect.left >= 0 && rect.right <= 390 && rect.width > 0,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: ".data/screenshots/transactions-phone.png",
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await expect(page.locator(".contributions-panel")).toHaveCount(0);
+  await page.getByLabel("Month", { exact: true }).fill("2026-08");
+  await page.reload();
+  await expect(page.getByLabel("Month", { exact: true })).toHaveValue(
+    "2026-08",
+  );
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: "Receipts", exact: true }).click();
+  await expect(page.getByLabel("Currency", { exact: true })).toHaveCount(0);
 });

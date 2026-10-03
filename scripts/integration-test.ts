@@ -41,7 +41,8 @@ const {
 } = await import("../src/server/banking");
 const { storeReceipt, processReceipt, extractDocument } =
   await import("../src/server/receipts");
-const { overview, receiptDetail } = await import("../src/server/reporting");
+const { overview, receiptDetail, receiptPage, receiptList } =
+  await import("../src/server/reporting");
 const { receiveEmail, processEmail } = await import("../src/server/email");
 const { applyAllocations, linkReceipt, reclassify } =
   await import("../src/server/ledger");
@@ -1624,6 +1625,39 @@ KUUPÄEV: 02.10.2026`;
         );
       } finally {
         globalThis.fetch = originalFetch;
+      }
+    },
+  );
+  await check(
+    "receipt pagination reaches older imports and filters the full collection",
+    async () => {
+      await query(`INSERT INTO receipts(file_hash,filename,content_type,storage_path,retailer,merchant,status,created_at)
+      SELECT 'pagination-regression-'||n,'receipt-'||n||'.txt','text/plain','test-only',
+        CASE WHEN n=205 THEN 'pagination-retailer' ELSE 'pagination-other' END,'Pagination receipt','ready',now()-n*interval '1 minute'
+      FROM generate_series(1,205) n`);
+      try {
+        const params = new URLSearchParams({ retailer: "pagination-other" });
+        const first = await receiptPage(params);
+        assert.equal(first.count, 204);
+        assert.equal(first.rows.length, 50);
+        params.set("page", "5");
+        const last = await receiptPage(params);
+        assert.equal(last.rows.length, 4);
+        assert.equal(last.page, 5);
+        const oldest = await receiptPage(
+          new URLSearchParams({ retailer: "pagination-retailer" }),
+        );
+        assert.equal(oldest.count, 1);
+        assert.equal(oldest.rows[0].filename, "receipt-205.txt");
+        assert.ok((await receiptList(true)).length >= 205);
+        const clamped = await receiptPage(
+          new URLSearchParams({ retailer: "pagination-other", page: "999" }),
+        );
+        assert.equal(clamped.page, 5);
+      } finally {
+        await query(
+          "DELETE FROM receipts WHERE file_hash LIKE 'pagination-regression-%'",
+        );
       }
     },
   );

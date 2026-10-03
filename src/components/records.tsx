@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import {
   api,
+  updateQuery,
   useData,
   Loading,
   ErrorMessage,
@@ -40,40 +41,23 @@ import { decimalMoney, formatMoney, parseMoney } from "../lib/money";
 
 export function TransactionsView({ context: ctx }: { context: AppContext }) {
   const searchParams = useSearchParams();
-  const [search, setSearch] = useState(searchParams.get("search") || ""),
-    [category, setCategory] = useState(searchParams.get("category") || ""),
-    [account, setAccount] = useState(""),
-    [kind, setKind] = useState(searchParams.get("kind") || ""),
-    [receipt, setReceipt] = useState(""),
-    [status, setStatus] = useState(searchParams.get("status") || ""),
-    [history, setHistory] = useState(false),
-    [page, setPage] = useState(1),
-    [showNew, setShowNew] = useState(searchParams.get("new") === "true"),
-    [minimum, setMinimum] = useState(""),
-    [maximum, setMaximum] = useState("");
-  useEffect(() => {
-    setCategory(searchParams.get("category") || "");
-    setSearch(searchParams.get("search") || "");
-    setStatus(searchParams.get("status") || "");
-    setKind(searchParams.get("kind") || "");
-    if (searchParams.get("new") === "true") setShowNew(true);
-  }, [searchParams]);
+  const search = searchParams.get("search") || "",
+    category = searchParams.get("category") || "",
+    account = searchParams.get("account") || "",
+    kind = searchParams.get("kind") || "",
+    receipt = searchParams.get("receipt") || "",
+    status = searchParams.get("status") || "",
+    history = searchParams.get("history") === "true",
+    page = Math.max(1, Math.floor(Number(searchParams.get("page")) || 1)),
+    minimum = searchParams.get("minimum") || "",
+    maximum = searchParams.get("maximum") || "";
+  const [showNew, setShowNew] = useState(searchParams.get("new") === "true");
   useEffect(
-    () => setPage(1),
-    [
-      category,
-      account,
-      kind,
-      receipt,
-      status,
-      history,
-      search,
-      minimum,
-      maximum,
-      ctx.month,
-      ctx.currency,
-    ],
+    () => setShowNew(searchParams.get("new") === "true"),
+    [searchParams],
   );
+  const setFilter = (key: string, value: string) =>
+    updateQuery({ [key]: value }, true);
   const params = new URLSearchParams({
     currency: ctx.currency,
     page: String(page),
@@ -92,31 +76,34 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
     count: number;
     limit: number;
   }>(`transactions?${params}`, ctx.revision, 30000);
+  const exportParams = new URLSearchParams(params);
+  exportParams.delete("page");
+  const returnTo = `/transactions?${searchParams.toString()}`;
   return (
     <div className="view-stack">
       <div className="action-row">
         <div className="tabs">
           <button
             className={!history ? "selected" : ""}
-            onClick={() => setHistory(false)}
+            onClick={() => setFilter("history", "")}
           >
-            This month
+            Selected month
           </button>
           <button
             className={history ? "selected" : ""}
-            onClick={() => setHistory(true)}
+            onClick={() => setFilter("history", "true")}
           >
             All history
           </button>
         </div>
         <div className="button-row">
-          <a
-            className="button secondary"
-            href={`/api/export?currency=${ctx.currency}${history ? "" : `&month=${ctx.month}`}`}
-          >
+          <a className="button secondary" href={`/api/export?${exportParams}`}>
             Export CSV
           </a>
-          <button className="button primary" onClick={() => setShowNew(true)}>
+          <button
+            className="button primary"
+            onClick={() => updateQuery({ new: "true" })}
+          >
             <Plus size={16} />
             Cash entry
           </button>
@@ -130,13 +117,13 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
               aria-label="Search transactions"
               placeholder="Search merchant or description…"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => setFilter("search", e.target.value)}
             />
           </label>
           <select
             aria-label="Filter category"
             value={category}
-            onChange={(e) => setCategory(e.target.value)}
+            onChange={(e) => setFilter("category", e.target.value)}
           >
             <option value="">All categories</option>
             {ctx.state.categories.map((c) => (
@@ -148,7 +135,7 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
           <select
             aria-label="Filter account"
             value={account}
-            onChange={(e) => setAccount(e.target.value)}
+            onChange={(e) => setFilter("account", e.target.value)}
           >
             <option value="">All accounts</option>
             {ctx.state.accounts.map((a) => (
@@ -161,7 +148,7 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
           <select
             aria-label="Filter payment type"
             value={kind}
-            onChange={(e) => setKind(e.target.value)}
+            onChange={(e) => setFilter("kind", e.target.value)}
           >
             <option value="">All types</option>
             {[
@@ -183,7 +170,7 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
           <select
             aria-label="Filter receipt status"
             value={receipt}
-            onChange={(e) => setReceipt(e.target.value)}
+            onChange={(e) => setFilter("receipt", e.target.value)}
           >
             <option value="">Any receipt status</option>
             <option value="linked">Receipt linked</option>
@@ -192,7 +179,7 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
           <select
             aria-label="Filter booking status"
             value={status}
-            onChange={(e) => setStatus(e.target.value)}
+            onChange={(e) => setFilter("status", e.target.value)}
           >
             <option value="">Booked & pending</option>
             <option value="BOOK">Booked</option>
@@ -203,21 +190,25 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
             placeholder="Min amount"
             inputMode="decimal"
             value={minimum}
-            onChange={(e) => setMinimum(e.target.value)}
+            onChange={(e) => setFilter("minimum", e.target.value)}
           />
           <input
             aria-label="Maximum amount"
             placeholder="Max amount"
             inputMode="decimal"
             value={maximum}
-            onChange={(e) => setMaximum(e.target.value)}
+            onChange={(e) => setFilter("maximum", e.target.value)}
           />
         </div>
         <ErrorMessage message={error} />
         {!data && loading ? (
           <Loading />
         ) : data?.rows.length ? (
-          <EntryTable entries={data.rows} navigate={ctx.navigate} />
+          <EntryTable
+            entries={data.rows}
+            navigate={ctx.navigate}
+            returnTo={returnTo}
+          />
         ) : (
           <Empty
             title="No matching transactions"
@@ -236,7 +227,7 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
                 className="icon-button"
                 disabled={page === 1}
                 aria-label="Previous page"
-                onClick={() => setPage((p) => p - 1)}
+                onClick={() => updateQuery({ page: String(page - 1) })}
               >
                 <ChevronLeft size={18} />
               </button>
@@ -245,7 +236,7 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
                 className="icon-button"
                 disabled={page * data.limit >= data.count}
                 aria-label="Next page"
-                onClick={() => setPage((p) => p + 1)}
+                onClick={() => updateQuery({ page: String(page + 1) })}
               >
                 <ChevronRight size={18} />
               </button>
@@ -258,7 +249,7 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
           context={ctx}
           close={() => {
             setShowNew(false);
-            if (searchParams.get("new")) ctx.navigate("/transactions");
+            updateQuery({ new: null });
           }}
         />
       )}
@@ -411,6 +402,11 @@ export function TransactionDetailView({
   context: AppContext;
   id: string;
 }) {
+  const searchParams = useSearchParams();
+  const requestedReturn = searchParams.get("returnTo") || "";
+  const returnTo = /^\/transactions(?:\?|$)/.test(requestedReturn)
+    ? requestedReturn
+    : "/transactions";
   const { data, error, loading } = useData<Entry>(
     `transactions/${id}`,
     ctx.revision,
@@ -476,14 +472,14 @@ export function TransactionDetailView({
       await api(`transactions/${id}`, undefined, "DELETE");
       ctx.refresh();
       ctx.notify("Cash entry deleted.");
-      ctx.navigate("/transactions");
+      ctx.navigate(returnTo);
     } catch (e) {
       setSaveError((e as Error).message);
     }
   };
   return (
     <div className="view-stack">
-      <TextLink onClick={() => ctx.navigate("/transactions")}>
+      <TextLink onClick={() => ctx.navigate(returnTo)}>
         <ArrowLeft size={15} />
         All transactions
       </TextLink>
@@ -703,14 +699,21 @@ export function TransactionDetailView({
   );
 }
 export function ReceiptsView({ context: ctx }: { context: AppContext }) {
-  const { data, error, loading } = useData<Receipt[]>(
-    "receipts",
-    ctx.revision,
-    5000,
-  );
+  const searchParams = useSearchParams();
+  const filter = searchParams.get("retailer") || "",
+    page = Math.max(1, Math.floor(Number(searchParams.get("page")) || 1));
+  const params = new URLSearchParams({
+    page: String(page),
+    ...(filter ? { retailer: filter } : {}),
+  });
+  const { data, error, loading } = useData<{
+    rows: Receipt[];
+    count: number;
+    page: number;
+    limit: number;
+  }>(`receipts?${params}`, ctx.revision, 5000);
   const [files, setFiles] = useState<File[]>([]),
     [retailer, setRetailer] = useState("unknown"),
-    [filter, setFilter] = useState("all"),
     [busy, setBusy] = useState(false),
     [uploadError, setUploadError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -746,8 +749,7 @@ export function ReceiptsView({ context: ctx }: { context: AppContext }) {
       setBusy(false);
     }
   };
-  const receipts =
-    data?.filter((r) => filter === "all" || r.retailer === filter) || [];
+  const receipts = data?.rows || [];
   return (
     <div className="view-stack">
       <section
@@ -820,9 +822,9 @@ export function ReceiptsView({ context: ctx }: { context: AppContext }) {
             <select
               aria-label="Filter retailer"
               value={filter}
-              onChange={(e) => setFilter(e.target.value)}
+              onChange={(e) => updateQuery({ retailer: e.target.value }, true)}
             >
-              <option value="all">All retailers</option>
+              <option value="">All retailers</option>
               <option value="rimi">Rimi</option>
               <option value="partnerkaart">Partnerkaart</option>
               <option value="coop">Coop</option>
@@ -835,12 +837,44 @@ export function ReceiptsView({ context: ctx }: { context: AppContext }) {
         {!data && loading ? (
           <Loading />
         ) : receipts.length ? (
-          <ReceiptTable receipts={receipts} context={ctx} />
+          <ReceiptTable
+            receipts={receipts}
+            context={ctx}
+            returnTo={`/receipts?${searchParams}`}
+          />
         ) : (
           <Empty
             title="No matching receipts"
             text="Import receipt files or select another retailer."
           />
+        )}
+        {data && (
+          <div className="pagination">
+            <span>
+              {data.count
+                ? `${(data.page - 1) * data.limit + 1}–${Math.min(data.page * data.limit, data.count)} of ${data.count}`
+                : "0 receipts"}
+            </span>
+            <div>
+              <button
+                className="icon-button"
+                aria-label="Previous page"
+                disabled={data.page === 1}
+                onClick={() => updateQuery({ page: String(data.page - 1) })}
+              >
+                <ChevronLeft size={18} />
+              </button>
+              <span>Page {data.page}</span>
+              <button
+                className="icon-button"
+                aria-label="Next page"
+                disabled={data.page * data.limit >= data.count}
+                onClick={() => updateQuery({ page: String(data.page + 1) })}
+              >
+                <ChevronRight size={18} />
+              </button>
+            </div>
+          </div>
         )}
       </section>
       <div className="notice subtle">
@@ -856,9 +890,11 @@ export function ReceiptsView({ context: ctx }: { context: AppContext }) {
 function ReceiptTable({
   receipts,
   context: ctx,
+  returnTo,
 }: {
   receipts: Receipt[];
   context: AppContext;
+  returnTo?: string;
 }) {
   return (
     <div className="table-wrap">
@@ -878,7 +914,11 @@ function ReceiptTable({
               <td>
                 <button
                   className="merchant-link"
-                  onClick={() => ctx.navigate(`/receipts/${receipt.id}`)}
+                  onClick={() =>
+                    ctx.navigate(
+                      `/receipts/${receipt.id}${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
+                    )
+                  }
                 >
                   <span
                     className={`merchant-avatar retailer-${receipt.retailer}`}
@@ -960,6 +1000,11 @@ export function ReceiptDetailView({
   context: AppContext;
   id: string;
 }) {
+  const searchParams = useSearchParams();
+  const requestedReturn = searchParams.get("returnTo") || "";
+  const returnTo = /^\/receipts(?:\?|$)/.test(requestedReturn)
+    ? requestedReturn
+    : "/receipts";
   const { data, error, loading } = useData<ReceiptDetail>(
     `receipts/${id}`,
     ctx.revision,
@@ -1040,7 +1085,7 @@ export function ReceiptDetailView({
   }
   return (
     <div className="view-stack">
-      <TextLink onClick={() => ctx.navigate("/receipts")}>
+      <TextLink onClick={() => ctx.navigate(returnTo)}>
         <ArrowLeft size={15} />
         All receipts
       </TextLink>

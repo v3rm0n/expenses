@@ -22,6 +22,8 @@ import {
   overview,
   receiptDetail,
   receiptList,
+  receiptPage,
+  transactionFilters,
   transactionList,
   dateWindow,
 } from "./reporting";
@@ -379,7 +381,7 @@ export async function handleApi(
       }
     }
     if (route === "receipts" && method === "GET")
-      return json(await receiptList(params.get("review") === "true"));
+      return json(await receiptPage(params));
     if (route === "receipts/upload" && method === "POST") {
       if (Number(request.headers.get("content-length")) > 100 * 1024 * 1024)
         throw new AppError("Upload at most 100 MB per batch.", 413);
@@ -1110,13 +1112,14 @@ async function exportCsv(params: URLSearchParams) {
   };
   const alias = type === "items" ? "r" : "t",
     date = type === "items" ? "purchased_at" : "booked_at";
-  if (params.get("currency"))
+  if (type === "items" && params.get("currency"))
     add(`${alias}.currency=?`, currencyInput.parse(params.get("currency")));
-  if (params.get("month")) {
+  if (type === "items" && params.get("month")) {
     const window = dateWindow(params.get("month")!);
     add(`${alias}.${date}>=?`, window.from);
     add(`${alias}.${date}<?`, window.to);
   }
+  const filters = transactionFilters(params);
   let rows;
   if (type === "items")
     rows = await query(
@@ -1125,13 +1128,13 @@ async function exportCsv(params: URLSearchParams) {
     );
   else if (type === "allocations")
     rows = await query(
-      `SELECT t.booked_at AS date,t.merchant,t.currency,t.kind,a.amount,c.name AS category,a.source FROM allocations a JOIN transactions t ON t.id=a.transaction_id JOIN categories c ON c.id=a.category_id WHERE t.status='BOOK' ${conditions.length ? `AND ${conditions.join(" AND ")}` : ""} ORDER BY date`,
-      values,
+      `SELECT t.booked_at AS date,t.merchant,t.currency,t.kind,a.amount,c.name AS category,a.source FROM allocations a JOIN transactions t ON t.id=a.transaction_id JOIN categories c ON c.id=a.category_id WHERE t.status='BOOK' AND ${filters.where} ORDER BY date,t.created_at,t.id`,
+      filters.values,
     );
   else
     rows = await query(
-      `SELECT t.booked_at AS date,t.merchant,t.description,t.currency,t.amount,t.kind,t.note FROM transactions t WHERE t.status='BOOK' ${conditions.length ? `AND ${conditions.join(" AND ")}` : ""} ORDER BY date`,
-      values,
+      `SELECT t.booked_at AS date,t.merchant,t.description,t.currency,t.amount,t.kind,t.status,t.note FROM transactions t WHERE ${filters.where} ORDER BY date,t.created_at,t.id`,
+      filters.values,
     );
   const columns =
     type === "items"
@@ -1162,6 +1165,7 @@ async function exportCsv(params: URLSearchParams) {
             "currency",
             "amount",
             "kind",
+            "status",
             "note",
           ];
   const escape = (value: unknown, numeric = false) => {

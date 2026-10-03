@@ -1,6 +1,18 @@
 "use client";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowRight, LoaderCircle, Inbox } from "lucide-react";
+export function updateQuery(
+  values: Record<string, string | null>,
+  resetPage = false,
+) {
+  const url = new URL(window.location.href);
+  if (resetPage) url.searchParams.delete("page");
+  for (const [key, value] of Object.entries(values)) {
+    if (value) url.searchParams.set(key, value);
+    else url.searchParams.delete(key);
+  }
+  window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+}
 export async function api<T = unknown>(
   path: string,
   body?: unknown,
@@ -291,12 +303,14 @@ export type AppContext = {
 export function EntryTable({
   entries,
   navigate,
+  returnTo,
 }: {
   entries: Entry[];
   navigate: (path: string) => void;
+  returnTo?: string;
 }) {
   return (
-    <div className="table-wrap">
+    <div className="table-wrap entry-table">
       <table>
         <thead>
           <tr>
@@ -313,7 +327,11 @@ export function EntryTable({
               <td>
                 <button
                   className="merchant-link"
-                  onClick={() => navigate(`/transactions/${entry.id}`)}
+                  onClick={() =>
+                    navigate(
+                      `/transactions/${entry.id}${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
+                    )
+                  }
                 >
                   <span className="merchant-avatar">
                     {initials(entry.merchant)}
@@ -331,7 +349,7 @@ export function EntryTable({
                   </span>
                 </button>
               </td>
-              <td className="nowrap">
+              <td className="entry-date nowrap">
                 {shortDate(entry.booked_at)}
                 {entry.status === "PDNG" && (
                   <div>
@@ -339,7 +357,7 @@ export function EntryTable({
                   </div>
                 )}
               </td>
-              <td>
+              <td className="entry-category">
                 {entry.allocations.length === 1 ? (
                   <Badge
                     variant={
@@ -357,14 +375,14 @@ export function EntryTable({
                   <Badge>{entry.kind.replace("_", " ")}</Badge>
                 )}
               </td>
-              <td className="muted small">
+              <td className="entry-account muted small">
                 {entry.account_name}
                 {Boolean(entry.receipt_count) && (
                   <div className="receipt-marker">Receipt linked</div>
                 )}
               </td>
               <td
-                className={`right amount ${entry.amount > 0 ? "positive" : ""}`}
+                className={`entry-amount right amount ${entry.amount > 0 ? "positive" : ""}`}
               >
                 {entry.amount > 0 ? "+" : ""}
                 {money(entry.amount, entry.currency)}

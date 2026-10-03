@@ -130,7 +130,7 @@ export async function overview(month: string, currency: string) {
     })),
   };
 }
-export async function transactionList(params: URLSearchParams, db: DB = pool) {
+export function transactionFilters(params: URLSearchParams) {
   const values: unknown[] = [],
     conditions: string[] = ["t.status<>'SUPERSEDED'"];
   const add = (condition: string, value: unknown) => {
@@ -181,7 +181,10 @@ export async function transactionList(params: URLSearchParams, db: DB = pool) {
     conditions.push(
       "t.status='BOOK' AND EXISTS(SELECT 1 FROM allocations ca WHERE ca.transaction_id=t.id AND ca.category_id='uncategorized' AND ca.amount<>0)",
     );
-  const where = conditions.join(" AND ");
+  return { where: conditions.join(" AND "), values };
+}
+export async function transactionList(params: URLSearchParams, db: DB = pool) {
+  const { where, values } = transactionFilters(params);
   const [count] = await query(
     `SELECT count(*)::int AS count FROM transactions t WHERE ${where}`,
     values,
@@ -199,11 +202,50 @@ export async function transactionList(params: URLSearchParams, db: DB = pool) {
   );
   return { rows, count: count.count, page, limit };
 }
+const receiptColumns = `SELECT r.*,coalesce((SELECT sum(p.amount)::bigint FROM receipt_payments p WHERE p.receipt_id=r.id),0) AS linked_amount,
+    (SELECT count(*)::int FROM receipt_items ri WHERE ri.receipt_id=r.id) AS item_count FROM receipts r`;
+function receiptFilters(params: URLSearchParams) {
+  const conditions = ["r.status<>'duplicate'"],
+    values: unknown[] = [];
+  if (params.get("review") === "true")
+    conditions.push(
+      "(r.status IN ('review','ready') OR r.status='matched' AND coalesce((SELECT sum(p.amount) FROM receipt_payments p WHERE p.receipt_id=r.id),0)<abs(r.total))",
+    );
+  if (params.get("retailer")) {
+    values.push(params.get("retailer"));
+    conditions.push("r.retailer=$1");
+  }
+  return { where: conditions.join(" AND "), values };
+}
 export async function receiptList(review = false) {
-  return query(`SELECT r.*,coalesce((SELECT sum(p.amount)::bigint FROM receipt_payments p WHERE p.receipt_id=r.id),0) AS linked_amount,
-    (SELECT count(*)::int FROM receipt_items ri WHERE ri.receipt_id=r.id) AS item_count FROM receipts r WHERE r.status<>'duplicate'
-    ${review ? "AND (r.status IN ('review','ready') OR r.status='matched' AND coalesce((SELECT sum(p.amount) FROM receipt_payments p WHERE p.receipt_id=r.id),0)<abs(r.total))" : ""}
-    ORDER BY r.created_at DESC LIMIT 200`);
+  const { where, values } = receiptFilters(
+    new URLSearchParams(review ? { review: "true" } : {}),
+  );
+  return query(
+    `${receiptColumns} WHERE ${where} ORDER BY r.created_at DESC,r.id DESC`,
+    values,
+  );
+}
+export async function receiptPage(params: URLSearchParams) {
+  const { where, values } = receiptFilters(params);
+  const limit = 50;
+  const requestedPage = Math.max(
+    1,
+    Math.floor(Number(params.get("page")) || 1),
+  );
+  const [count] = await query(
+    `SELECT count(*)::int AS count FROM receipts r WHERE ${where}`,
+    values,
+  );
+  const page = Math.min(
+    requestedPage,
+    Math.max(1, Math.ceil(count.count / limit)),
+  );
+  const rows = await query(
+    `${receiptColumns} WHERE ${where} ORDER BY r.created_at DESC,r.id DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+    [...values, limit, (page - 1) * limit],
+  );
+  return { rows, count: count.count, page, limit };
 }
 export async function receiptDetail(id: string) {
   const [receipt] = await query("SELECT * FROM receipts WHERE id=$1", [id]);

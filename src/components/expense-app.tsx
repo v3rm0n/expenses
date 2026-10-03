@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import {
   api,
+  updateQuery,
   useData,
   Loading,
   ErrorMessage,
@@ -76,7 +77,14 @@ export default function ExpenseApp() {
   const refresh = () => setRevision((value) => value + 1),
     navigate = (path: string) => {
       setMobile(false);
-      router.push(path);
+      const target = new URL(path, window.location.origin);
+      if (["/", "/transactions"].includes(target.pathname)) {
+        if (!target.searchParams.has("month"))
+          target.searchParams.set("month", month);
+        if (!target.searchParams.has("currency"))
+          target.searchParams.set("currency", currency);
+      }
+      router.push(`${target.pathname}${target.search}`);
     };
   useEffect(() => {
     api<{ authenticated: boolean; needsSetup: boolean }>("auth/status")
@@ -147,6 +155,14 @@ export default function ExpenseApp() {
         {state.loading && <Loading />}
       </div>
     );
+  function selectMonth(value: string) {
+    setMonth(value);
+    updateQuery({ month: value }, true);
+  }
+  function selectCurrency(value: string) {
+    setCurrency(value);
+    updateQuery({ currency: value }, true);
+  }
   const context: AppContext = {
     state: state.data,
     currency,
@@ -155,7 +171,7 @@ export default function ExpenseApp() {
     refresh,
     navigate,
     notify: setToast,
-    setMonth,
+    setMonth: selectMonth,
   };
   const path = pathname.split("/").filter(Boolean),
     active = path[0] || "overview";
@@ -169,7 +185,7 @@ export default function ExpenseApp() {
   const shiftMonth = (by: number) => {
     const d = new Date(`${month}-01T12:00:00Z`);
     d.setUTCMonth(d.getUTCMonth() + by);
-    setMonth(d.toISOString().slice(0, 7));
+    selectMonth(d.toISOString().slice(0, 7));
   };
   return (
     <div className="app-layout">
@@ -243,37 +259,47 @@ export default function ExpenseApp() {
                   : title}
               </h1>
             </div>
-            <div className="page-controls">
-              <select
-                aria-label="Currency"
-                className="currency-select"
-                value={currency}
-                onChange={(e) => setCurrency(e.target.value)}
-              >
-                {[...new Set([...state.data.currencies, currency])].map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </select>
-              {["overview", "transactions"].includes(active) && (
-                <div className="month-picker">
-                  <button
-                    aria-label="Previous month"
-                    onClick={() => shiftMonth(-1)}
+            {path.length <= 1 &&
+              ["overview", "transactions"].includes(active) && (
+                <div className="page-controls">
+                  <select
+                    aria-label="Currency"
+                    className="currency-select"
+                    value={currency}
+                    onChange={(e) => selectCurrency(e.target.value)}
                   >
-                    <ChevronLeft size={16} />
-                  </button>
-                  <input
-                    type="month"
-                    aria-label="Month"
-                    value={month}
-                    onChange={(e) => e.target.value && setMonth(e.target.value)}
-                  />
-                  <button aria-label="Next month" onClick={() => shiftMonth(1)}>
-                    <ChevronRight size={16} />
-                  </button>
+                    {[...new Set([...state.data.currencies, currency])].map(
+                      (c) => (
+                        <option key={c}>{c}</option>
+                      ),
+                    )}
+                  </select>
+                  {search.get("history") !== "true" && (
+                    <div className="month-picker">
+                      <button
+                        aria-label="Previous month"
+                        onClick={() => shiftMonth(-1)}
+                      >
+                        <ChevronLeft size={16} />
+                      </button>
+                      <input
+                        type="month"
+                        aria-label="Month"
+                        value={month}
+                        onChange={(e) =>
+                          e.target.value && selectMonth(e.target.value)
+                        }
+                      />
+                      <button
+                        aria-label="Next month"
+                        onClick={() => shiftMonth(1)}
+                      >
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
           </div>
           <ErrorMessage message={state.error} />
           {active === "overview" && <OverviewView context={context} />}
@@ -496,6 +522,23 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
   });
   const previous = data.trend.at(-2)?.spending || 0,
     difference = data.spending - previous;
+  const contributionKinds = [
+    {
+      kind: "investment",
+      label: "INVESTMENT TRANSFERS",
+      totals: data.investment,
+    },
+    { kind: "pension", label: "PENSION CONTRIBUTIONS", totals: data.pension },
+  ].filter(
+    ({ totals }) =>
+      totals.contributed ||
+      totals.withdrawn ||
+      totals.history_contributed ||
+      totals.history_withdrawn,
+  );
+  const contributionMonths = data.trend.filter(
+    (point) => point.investment || point.pension,
+  );
   return (
     <div className="view-stack">
       <ErrorMessage message={error} />
@@ -582,84 +625,75 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
           </div>
         </div>
       </div>
-      <section className="panel contributions-panel">
-        <SectionTitle title="Investments and pensions" />
-        <div className="metric-grid contribution-grid">
-          {(
-            [
-              {
-                kind: "investment",
-                label: "INVESTMENT TRANSFERS",
-                totals: data.investment,
-              },
-              {
-                kind: "pension",
-                label: "PENSION CONTRIBUTIONS",
-                totals: data.pension,
-              },
-            ] as const
-          ).map(({ kind, label, totals }) => (
-            <div className="metric" key={kind}>
-              <div className="metric-label">
-                {label}
-                <span>
-                  <Landmark size={16} />
-                </span>
-              </div>
-              <div className="metric-value">{fmt(totals.contributed)}</div>
-              <div className="metric-caption">Contributed this month</div>
-              {totals.withdrawn !== 0 && (
+      {contributionKinds.length > 0 && (
+        <section className="panel contributions-panel">
+          <SectionTitle title="Investments and pensions" />
+          <div className="metric-grid contribution-grid">
+            {contributionKinds.map(({ kind, label, totals }) => (
+              <div className="metric" key={kind}>
+                <div className="metric-label">
+                  {label}
+                  <span>
+                    <Landmark size={16} />
+                  </span>
+                </div>
+                <div className="metric-value">{fmt(totals.contributed)}</div>
+                <div className="metric-caption">Contributed this month</div>
+                {totals.withdrawn !== 0 && (
+                  <p className="form-help">
+                    {fmt(totals.withdrawn)} returned · {fmt(totals.net)} net
+                  </p>
+                )}
                 <p className="form-help">
-                  {fmt(totals.withdrawn)} returned · {fmt(totals.net)} net
+                  {fmt(totals.history_contributed)} contributed in imported
+                  history through this month
+                  {totals.history_withdrawn !== 0
+                    ? ` · ${fmt(totals.history_withdrawn)} returned · ${fmt(totals.history_net)} net`
+                    : ""}
                 </p>
-              )}
-              <p className="form-help">
-                {fmt(totals.history_contributed)} contributed in imported
-                history through this month
-                {totals.history_withdrawn !== 0
-                  ? ` · ${fmt(totals.history_withdrawn)} returned · ${fmt(totals.history_net)} net`
-                  : ""}
-              </p>
-              <TextLink
-                onClick={() =>
-                  ctx.navigate(
-                    `/transactions?kind=${kind}&month=${ctx.month}&currency=${ctx.currency}`,
-                  )
-                }
-              >
-                View transfers
-              </TextLink>
+                <TextLink
+                  onClick={() =>
+                    ctx.navigate(
+                      `/transactions?kind=${kind}&month=${ctx.month}&currency=${ctx.currency}`,
+                    )
+                  }
+                >
+                  View transfers
+                </TextLink>
+              </div>
+            ))}
+          </div>
+          {contributionMonths.length > 0 && (
+            <div className="table-scroll">
+              <table className="contribution-table">
+                <thead>
+                  <tr>
+                    <th>Month</th>
+                    <th>Investments, net</th>
+                    <th>Pension, net</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {contributionMonths.map((point) => (
+                    <tr key={point.month}>
+                      <td>
+                        <button
+                          className="text-link"
+                          onClick={() => ctx.setMonth(point.month)}
+                        >
+                          {point.month}
+                        </button>
+                      </td>
+                      <td>{fmt(point.investment)}</td>
+                      <td>{fmt(point.pension)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          ))}
-        </div>
-        <div className="table-scroll">
-          <table className="contribution-table">
-            <thead>
-              <tr>
-                <th>Month</th>
-                <th>Investments, net</th>
-                <th>Pension, net</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.trend.map((point) => (
-                <tr key={point.month}>
-                  <td>
-                    <button
-                      className="text-link"
-                      onClick={() => ctx.setMonth(point.month)}
-                    >
-                      {point.month}
-                    </button>
-                  </td>
-                  <td>{fmt(point.investment)}</td>
-                  <td>{fmt(point.pension)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+          )}
+        </section>
+      )}
       <div className="overview-grid">
         <section className="panel category-panel">
           <SectionTitle
