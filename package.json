@@ -1,0 +1,57 @@
+{
+  "name": "personal-expenses",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx scripts/run.ts dev",
+    "build": "next build",
+    "start": "tsx scripts/run.ts",
+    "start:background": "tsx scripts/background.ts",
+    "stop": "tsx scripts/background.ts stop",
+    "worker": "tsx scripts/worker.ts",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:start": "tsx scripts/database.ts",
+    "setup": "tsx scripts/setup.ts",
+    "test": "vitest run",
+    "test:integration": "tsx scripts/integration-test.ts",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "backup": "tsx scripts/backup.ts",
+    "restore": "tsx scripts/restore.ts"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^1.0.10",
+    "dotenv": "^17.2.0",
+    "html-to-text": "^9.0.5",
+    "imapflow": "^1.0.195",
+    "lucide-react": "^0.468.0",
+    "mailparser": "^3.7.4",
+    "next": "^16.3.8",
+    "pdfjs-dist": "^6.3.289",
+    "pg": "^8.16.3",
+    "pg-boss": "^12.35.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tesseract.js": "^7.0.0",
+    "tsx": "^4.20.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@types/html-to-text": "^9.0.4",
+    "@types/mailparser": "^3.4.6",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.5",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "prettier": "^3.9.9",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

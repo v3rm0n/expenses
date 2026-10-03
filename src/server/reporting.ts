@@ -1,0 +1,271 @@
+import { query, type DB, pool } from "./db";
+import { validDate, parseMoney } from "../lib/money";
+import { AppError } from "./errors";
+
+export function dateWindow(month: string) {
+  if (!/^\d{4}-\d{2}$/.test(month)) throw new AppError("Choose a valid month.");
+  const from = validDate(`${month}-01`),
+    start = new Date(`${from}T12:00:00Z`);
+  const to = new Date(
+    Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1),
+  )
+    .toISOString()
+    .slice(0, 10);
+  return { from, to };
+}
+export async function overview(month: string, currency: string) {
+  const { from, to } = dateWindow(month);
+  const [totals] = await query<{
+    transactions: number;
+    gross_spending: number;
+    refunds: number;
+    income: number;
+    expense_count: number;
+    receipt_count: number;
+  }>(
+    `SELECT count(*)::int AS transactions,
+    coalesce(sum(-amount) FILTER(WHERE kind='expense'),0)::bigint AS gross_spending,
+    coalesce(sum(amount) FILTER(WHERE kind='refund'),0)::bigint AS refunds,
+    coalesce(sum(amount) FILTER(WHERE kind='income'),0)::bigint AS income,
+    count(*) FILTER(WHERE kind IN ('expense','refund'))::int AS expense_count,
+    count(*) FILTER(WHERE kind IN ('expense','refund') AND EXISTS(SELECT 1 FROM receipt_payments p WHERE p.transaction_id=t.id))::int AS receipt_count
+    FROM transactions t WHERE status='BOOK' AND currency=$1 AND booked_at >= $2 AND booked_at < $3`,
+    [currency, from, to],
+  );
+  const contributions = await query<{
+    kind: "investment" | "pension";
+    contributed: number;
+    withdrawn: number;
+    net: number;
+    history_contributed: number;
+    history_withdrawn: number;
+    history_net: number;
+  }>(
+    `SELECT k.kind,
+      coalesce(sum(-t.amount) FILTER(WHERE t.amount<0 AND t.booked_at >= $2),0)::bigint AS contributed,
+      coalesce(sum(t.amount) FILTER(WHERE t.amount>0 AND t.booked_at >= $2),0)::bigint AS withdrawn,
+      coalesce(sum(-t.amount) FILTER(WHERE t.booked_at >= $2),0)::bigint AS net,
+      coalesce(sum(-t.amount) FILTER(WHERE t.amount<0),0)::bigint AS history_contributed,
+      coalesce(sum(t.amount) FILTER(WHERE t.amount>0),0)::bigint AS history_withdrawn,
+      coalesce(sum(-t.amount),0)::bigint AS history_net
+    FROM (VALUES ('investment'),('pension')) k(kind)
+    LEFT JOIN transactions t ON t.kind=k.kind AND t.status='BOOK' AND t.currency=$1 AND t.booked_at < $3
+    GROUP BY k.kind ORDER BY k.kind`,
+    [currency, from, to],
+  );
+  const investment = contributions.find((c) => c.kind === "investment")!;
+  const pension = contributions.find((c) => c.kind === "pension")!;
+  const [uncategorized] = await query(
+    `SELECT coalesce(sum(a.amount),0)::bigint AS amount,count(distinct t.id)::int AS count
+    FROM allocations a JOIN transactions t ON t.id=a.transaction_id WHERE a.category_id='uncategorized' AND t.status='BOOK' AND t.currency=$1 AND t.booked_at >= $2 AND t.booked_at < $3`,
+    [currency, from, to],
+  );
+  const categories = await query(
+    `SELECT c.*,sum(a.amount)::bigint AS amount,count(distinct t.id)::int AS count FROM allocations a
+    JOIN transactions t ON t.id=a.transaction_id JOIN categories c ON c.id=a.category_id
+    WHERE t.status='BOOK' AND t.kind IN ('expense','refund') AND t.currency=$1 AND t.booked_at >= $2 AND t.booked_at < $3 GROUP BY c.id ORDER BY amount DESC`,
+    [currency, from, to],
+  );
+  const merchants = await query(
+    `SELECT merchant,sum(-amount)::bigint AS amount,count(*)::int AS count FROM transactions
+    WHERE status='BOOK' AND kind IN ('expense','refund') AND currency=$1 AND booked_at >= $2 AND booked_at < $3 GROUP BY merchant ORDER BY amount DESC LIMIT 6`,
+    [currency, from, to],
+  );
+  const trend = await query(
+    `WITH months AS (SELECT generate_series($2::date-interval '5 months',$2::date,interval '1 month')::date AS month)
+    SELECT to_char(m.month,'YYYY-MM') AS month,coalesce(sum(-t.amount) FILTER(WHERE t.kind IN ('expense','refund')),0)::bigint AS spending,
+    coalesce(sum(t.amount) FILTER(WHERE t.kind='income'),0)::bigint AS income,
+    coalesce(sum(-t.amount) FILTER(WHERE t.kind='investment'),0)::bigint AS investment,
+    coalesce(sum(-t.amount) FILTER(WHERE t.kind='pension'),0)::bigint AS pension FROM months m LEFT JOIN transactions t ON t.booked_at>=m.month AND t.booked_at<m.month+interval '1 month'
+    AND t.currency=$1 AND t.status='BOOK' GROUP BY m.month ORDER BY m.month`,
+    [currency, from],
+  );
+  const recent = await transactionList(
+    new URLSearchParams({ month, currency, limit: "6" }),
+  );
+  const [pending] = await query(
+    "SELECT count(*)::int AS count,coalesce(sum(-amount) FILTER(WHERE amount<0),0)::bigint AS amount FROM transactions WHERE status='PDNG' AND currency=$1",
+    [currency],
+  );
+  const [cash] = await query(
+    `SELECT GREATEST(0,coalesce(sum(-t.amount) FILTER(WHERE t.kind='cash_movement'),0)-coalesce(sum(-t.amount) FILTER(WHERE a.source='cash' AND t.kind IN ('expense','refund')),0))::bigint AS amount
+    FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE t.status='BOOK' AND t.currency=$1`,
+    [currency],
+  );
+  const recurring = await query(
+    `SELECT merchant,currency,count(distinct to_char(booked_at,'YYYY-MM'))::int AS months,
+    round(avg(-amount))::bigint AS amount,max(booked_at) AS last_payment FROM transactions WHERE kind='expense' AND status='BOOK'
+    AND currency=$1 AND booked_at >= $2::date-interval '12 months' GROUP BY merchant,currency
+    HAVING count(distinct to_char(booked_at,'YYYY-MM'))>=3 AND max(-amount)-min(-amount)<=avg(-amount)*0.1 ORDER BY amount DESC LIMIT 6`,
+    [currency, to],
+  );
+  const [confirmed] = await query(
+    "SELECT value FROM settings WHERE key='recurring'",
+  );
+  return {
+    month,
+    currency,
+    ...totals,
+    spending: totals.gross_spending - totals.refunds,
+    net_cash_flow:
+      totals.income -
+      totals.gross_spending +
+      totals.refunds -
+      investment.net -
+      pension.net,
+    investment,
+    pension,
+    uncategorized,
+    categories,
+    merchants,
+    trend,
+    recent: recent.rows,
+    pending,
+    cash,
+    recurring: recurring.map((item) => ({
+      ...item,
+      confirmed: (confirmed?.value || []).includes(
+        `${item.currency}:${item.merchant}`,
+      ),
+    })),
+  };
+}
+export async function transactionList(params: URLSearchParams, db: DB = pool) {
+  const values: unknown[] = [],
+    conditions: string[] = ["t.status<>'SUPERSEDED'"];
+  const add = (condition: string, value: unknown) => {
+    values.push(value);
+    conditions.push(condition.replace(/\?/g, `$${values.length}`));
+  };
+  if (params.get("month")) {
+    const { from, to } = dateWindow(params.get("month")!);
+    add("(t.booked_at>=? OR t.status='PDNG' AND t.booked_at IS NULL)", from);
+    add("(t.booked_at<? OR t.status='PDNG' AND t.booked_at IS NULL)", to);
+  }
+  if (params.get("from")) add("t.booked_at>=?", validDate(params.get("from")!));
+  if (params.get("to")) add("t.booked_at<=?", validDate(params.get("to")!));
+  if (params.get("currency"))
+    add("t.currency=?", params.get("currency")!.toUpperCase());
+  if (params.get("account")) add("t.account_id::text=?", params.get("account"));
+  if (params.get("category"))
+    add(
+      "EXISTS(SELECT 1 FROM allocations ca WHERE ca.transaction_id=t.id AND ca.category_id=?)",
+      params.get("category"),
+    );
+  if (params.get("kind")) add("t.kind=?", params.get("kind"));
+  if (params.get("status")) add("t.status=?", params.get("status"));
+  if (params.get("search"))
+    add(
+      "(t.merchant ILIKE ? OR t.description ILIKE ? OR t.note ILIKE ?)",
+      `%${params.get("search")!.slice(0, 200)}%`,
+    );
+  if (params.get("minimum"))
+    add(
+      "abs(t.amount)>=?",
+      parseMoney(params.get("minimum")!, params.get("currency") || "EUR"),
+    );
+  if (params.get("maximum"))
+    add(
+      "abs(t.amount)<=?",
+      parseMoney(params.get("maximum")!, params.get("currency") || "EUR"),
+    );
+  if (params.get("receipt") === "missing")
+    conditions.push(
+      "NOT EXISTS(SELECT 1 FROM receipt_payments rp WHERE rp.transaction_id=t.id) AND t.kind IN ('expense','refund')",
+    );
+  if (params.get("receipt") === "linked")
+    conditions.push(
+      "EXISTS(SELECT 1 FROM receipt_payments rp WHERE rp.transaction_id=t.id)",
+    );
+  if (params.get("review") === "true")
+    conditions.push(
+      "t.status='BOOK' AND EXISTS(SELECT 1 FROM allocations ca WHERE ca.transaction_id=t.id AND ca.category_id='uncategorized' AND ca.amount<>0)",
+    );
+  const where = conditions.join(" AND ");
+  const [count] = await query(
+    `SELECT count(*)::int AS count FROM transactions t WHERE ${where}`,
+    values,
+    db,
+  );
+  const limit = Math.min(100, Math.max(1, Number(params.get("limit")) || 50)),
+    page = Math.max(1, Number(params.get("page")) || 1);
+  const rows = await query(
+    `SELECT t.id,t.account_id,t.amount,t.currency,t.kind,t.status,t.booked_at,t.merchant,t.description,t.manual,t.note,a.name AS account_name,a.source,
+    coalesce((SELECT jsonb_agg(jsonb_build_object('category_id',al.category_id,'name',c.name,'color',c.color,'amount',al.amount,'source',al.source)) FROM allocations al JOIN categories c ON c.id=al.category_id WHERE al.transaction_id=t.id),'[]') AS allocations,
+    (SELECT count(*)::int FROM receipt_payments p WHERE p.transaction_id=t.id) AS receipt_count FROM transactions t JOIN accounts a ON a.id=t.account_id
+    WHERE ${where} ORDER BY t.booked_at DESC,t.created_at DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+    [...values, limit, (page - 1) * limit],
+    db,
+  );
+  return { rows, count: count.count, page, limit };
+}
+export async function receiptList(review = false) {
+  return query(`SELECT r.*,coalesce((SELECT sum(p.amount)::bigint FROM receipt_payments p WHERE p.receipt_id=r.id),0) AS linked_amount,
+    (SELECT count(*)::int FROM receipt_items ri WHERE ri.receipt_id=r.id) AS item_count FROM receipts r WHERE r.status<>'duplicate'
+    ${review ? "AND (r.status IN ('review','ready') OR r.status='matched' AND coalesce((SELECT sum(p.amount) FROM receipt_payments p WHERE p.receipt_id=r.id),0)<abs(r.total))" : ""}
+    ORDER BY r.created_at DESC LIMIT 200`);
+}
+export async function receiptDetail(id: string) {
+  const [receipt] = await query("SELECT * FROM receipts WHERE id=$1", [id]);
+  if (!receipt) throw new AppError("Receipt not found.", 404);
+  const items = await query(
+    "SELECT ri.*,c.name AS category_name FROM receipt_items ri JOIN categories c ON c.id=ri.category_id WHERE receipt_id=$1 ORDER BY position",
+    [id],
+  );
+  const links = await query(
+    `SELECT p.*,t.merchant,t.booked_at,t.currency,t.amount AS transaction_amount,t.status,t.description,a.name AS account_name,a.source FROM receipt_payments p JOIN transactions t ON t.id=p.transaction_id JOIN accounts a ON a.id=t.account_id WHERE p.receipt_id=$1`,
+    [id],
+  );
+  const candidates =
+    receipt.purchased_at && receipt.total
+      ? await query(
+          `SELECT t.id,t.merchant,t.description,t.status,t.booked_at,t.amount,t.currency,a.name AS account_name,
+    abs(t.amount)-coalesce((SELECT sum(p.amount)::bigint FROM receipt_payments p WHERE p.transaction_id=t.id),0) AS available_amount
+    FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE t.status IN ('BOOK','PDNG') AND t.currency=$1 AND t.kind=$2
+    AND coalesce(t.booked_at,t.value_at,t.created_at::date) BETWEEN $3::date-1 AND $3::date+7 AND NOT EXISTS(SELECT 1 FROM receipt_payments p WHERE p.receipt_id=$4 AND p.transaction_id=t.id)
+    AND abs(t.amount)>coalesce((SELECT sum(p.amount)::bigint FROM receipt_payments p WHERE p.transaction_id=t.id),0)
+    ORDER BY abs(abs(t.amount)-abs($5::bigint)),CASE WHEN t.status='BOOK' THEN 0 ELSE 1 END,t.booked_at,t.id LIMIT 30`,
+          [
+            receipt.currency,
+            receipt.total > 0 ? "expense" : "refund",
+            receipt.purchased_at,
+            id,
+            receipt.total,
+          ],
+        )
+      : [];
+  return {
+    ...receipt,
+    items,
+    links,
+    candidates: candidates.filter((c) => c.available_amount > 0),
+  };
+}
+export async function applicationState() {
+  const [owner] = await query("SELECT name FROM owner");
+  const categories = await query(
+    "SELECT * FROM categories ORDER BY CASE WHEN id='uncategorized' THEN 1 ELSE 0 END,name",
+  );
+  const accounts = await query(
+    "SELECT a.*,b.bank_name,b.country FROM accounts a LEFT JOIN bank_connections b ON b.id=a.connection_id ORDER BY a.source,a.name,a.currency",
+  );
+  const currencies = await query(
+    "SELECT DISTINCT currency FROM (SELECT currency FROM transactions UNION SELECT currency FROM accounts UNION SELECT currency FROM receipts UNION SELECT 'EUR') x WHERE currency IS NOT NULL ORDER BY currency",
+  );
+  const [review] = await query(`SELECT
+    (SELECT count(*)::int FROM transactions t WHERE status='BOOK' AND EXISTS(SELECT 1 FROM allocations a WHERE a.transaction_id=t.id AND a.category_id='uncategorized' AND a.amount<>0)) AS transactions,
+    (SELECT count(*)::int FROM receipts r WHERE status IN ('review','ready') OR status='matched' AND coalesce((SELECT sum(p.amount) FROM receipt_payments p WHERE p.receipt_id=r.id),0)<abs(r.total)) AS receipts,
+    (SELECT count(*)::int FROM inbound_emails WHERE status IN ('review','error')) AS emails`);
+  return {
+    owner: owner.name,
+    categories,
+    accounts,
+    currencies: currencies.map((c) => c.currency),
+    review,
+    appUrl: configUrl(),
+  };
+}
+import { config } from "./config";
+function configUrl() {
+  return config.appUrl;
+}

@@ -1,0 +1,12 @@
+node_modules/
+.next*/
+next-env.d.ts
+.env*
+.data/
+backups/
+playwright-report/
+test-results/
+coverage/
+.wrangler/
+integrations/cloudflare/wrangler.jsonc
+package-lock.json
