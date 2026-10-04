@@ -61,6 +61,79 @@ describe("Partnerkaart / Selver CSV", () => {
     });
     expect(receipt.items[1].quantity).toBe("0.228");
   });
+  it("deducts redeemed bonus money with exact cents and keeps the original text", () => {
+    const input = selverCsv.replace(
+      "PARTNERAPP;9,63",
+      "BOONUSRAHA;0,47\nPARTNERAPP;9,16",
+    );
+    const receipt = parseReceipt(input);
+    expect(receipt).toMatchObject({
+      valid: true,
+      total: 916,
+      cardAmount: 916,
+      issues: [],
+    });
+    expect(receipt.items.map((item) => item.amount)).toEqual([
+      37, 151, 185, 186, 357,
+    ]);
+    expect(receipt.items[1].quantity).toBe("0.228");
+    expect(receipt.text).toContain("BOONUSRAHA;0,47");
+    expect(parseReceipt(input)).toEqual(receipt);
+  });
+  it("preserves deposits when splitting bonus money over products", () => {
+    const receipt = parseReceipt(
+      selverCsv
+        .replace("KOKKU;9,63", "Pant;999055;1;0,10;0,10\nKOKKU;9,73")
+        .replace(
+          "PARTNERAPP;9,63",
+          "BOONUSRAHA;0,47\nPARTNERAPP;5,00\nSULARAHA;4,26",
+        ),
+    );
+    expect(receipt).toMatchObject({
+      valid: true,
+      total: 926,
+      cardAmount: 500,
+      cashAmount: 426,
+    });
+    expect(receipt.items.at(-1)).toMatchObject({
+      categoryId: "deposits",
+      amount: 10,
+    });
+    expect(receipt.items.reduce((sum, item) => sum + item.amount, 0)).toBe(926);
+  });
+  it("supports purchases paid entirely with bonus money", () => {
+    const receipt = parseReceipt(
+      selverCsv.replace("PARTNERAPP;9,63", "BOONUSRAHA;9,63"),
+    );
+    expect(receipt).toMatchObject({
+      valid: true,
+      total: 0,
+      cardAmount: null,
+      cashAmount: null,
+    });
+    expect(receipt.items.every((item) => item.amount === 0)).toBe(true);
+  });
+  it.each([
+    ["BOONUSRAHA;unknown\nPARTNERAPP;9,16", "KOKKU;9,63"],
+    ["BOONUSRAHA;-0,47\nPARTNERAPP;10,10", "KOKKU;9,63"],
+    ["BOONUSRAHA;0,47\nPARTNERAPP;9,17", "KOKKU;9,63"],
+    ["BOONUSRAHA;10,00\nPARTNERAPP;-0,37", "KOKKU;9,63"],
+    ["BOONUSRAHA;0,47\nPARTNERAPP;9,16", "KOKKU;9,64"],
+    ["BOONUSRAHA;0,47", "KOKKU;9,63"],
+  ])(
+    "keeps corrupt bonus tenders or baskets in review: %s",
+    (tenders, total) => {
+      const receipt = parseReceipt(
+        selverCsv
+          .replace("PARTNERAPP;9,63", tenders)
+          .replace("KOKKU;9,63", total),
+      );
+      expect(receipt.valid).toBe(false);
+      expect(receipt.items.map((item) => item.amount)).toEqual([
+        39, 159, 195, 195, 375,
+      ]);
+    },
+  );
   it.each([
     ["KOKKU;9,63", "KOKKU;9,64"],
     ["PARTNERAPP;9,63", "PARTNERAPP;9,64"],

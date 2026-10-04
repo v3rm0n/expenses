@@ -885,6 +885,67 @@ KUUPÄEV: 02.10.2026`;
     },
   );
   await check(
+    "Selver bonus money matches the net bank payment and preserves deposits on reprocessing",
+    async () => {
+      const csv = Buffer.from(
+        selverCsv
+          .replace("CSV-1001", "CSV-BONUS-1001")
+          .replace("KOKKU;9,63", "Pant;999055;1;0,10;0,10\nKOKKU;9,73")
+          .replace("PARTNERAPP;9,63", "BOONUSRAHA;0,47\nPARTNERAPP;9,26"),
+      );
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [bank("selver-bonus", "9.26", "Selver")],
+          db,
+        ),
+      );
+      const uploaded = await storeReceipt(csv, "selver-bonus.csv");
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await processReceipt(uploaded.id);
+        const [receipt] = await query(
+          "SELECT status,total,card_amount,issues FROM receipts WHERE id=$1",
+          [uploaded.id],
+        );
+        assert.deepEqual(receipt, {
+          status: "matched",
+          total: 926,
+          card_amount: 926,
+          issues: [],
+        });
+        const links = await query(
+          "SELECT p.amount,t.source_key FROM receipt_payments p JOIN transactions t ON t.id=p.transaction_id WHERE p.receipt_id=$1",
+          [uploaded.id],
+        );
+        assert.deepEqual(links, [
+          { amount: 926, source_key: "ref:selver-bonus" },
+        ]);
+        const items = await query(
+          "SELECT category_id,amount FROM receipt_items WHERE receipt_id=$1 ORDER BY position",
+          [uploaded.id],
+        );
+        assert.equal(
+          items.reduce((sum, item) => sum + item.amount, 0),
+          926,
+        );
+        assert.deepEqual(items.at(-1), { category_id: "deposits", amount: 10 });
+        const allocations = await query(
+          "SELECT a.category_id,a.amount FROM allocations a JOIN receipt_payments p ON p.transaction_id=a.transaction_id WHERE p.receipt_id=$1 ORDER BY a.category_id",
+          [uploaded.id],
+        );
+        assert.equal(
+          allocations.reduce((sum, item) => sum + item.amount, 0),
+          926,
+        );
+        assert.equal(
+          allocations.find((item) => item.category_id === "deposits")?.amount,
+          10,
+        );
+      }
+      assert.equal((await storeReceipt(csv, "same-bonus.csv")).id, uploaded.id);
+    },
+  );
+  await check(
     "Selver CSV uploads and named/unnamed email attachments share one receipt",
     async () => {
       const csv = Buffer.from(selverCsv);

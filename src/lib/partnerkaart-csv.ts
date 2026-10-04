@@ -1,5 +1,5 @@
 import { productCategory } from "./classification";
-import { parseMoney, validDate } from "./money";
+import { parseMoney, prorate, validDate } from "./money";
 import type { ParsedReceipt, ReceiptItem } from "./types";
 
 function csvRows(text: string): string[][] {
@@ -129,6 +129,7 @@ export function parsePartnerkaartCsv(text: string): ParsedReceipt | null {
       manual: false,
     });
   }
+  let bonusAmount = 0;
   for (const row of rows.slice(basketEnd + 1)) {
     if (/^KM%$/i.test(row[0])) break;
     const card =
@@ -136,10 +137,12 @@ export function parsePartnerkaartCsv(text: string): ParsedReceipt | null {
         row[0],
       );
     const cash = /^(?:SULARAHA|CASH)$/i.test(row[0]);
-    if (card || cash) {
+    const bonus = /^BOONUSRAHA$/i.test(row[0]);
+    if (card || cash || bonus) {
       const amount = money(row[1]);
-      if (amount === null)
+      if (amount === null || (bonus && amount < 0))
         issues.push("A receipt payment amount could not be read.");
+      else if (bonus) bonusAmount += amount;
       else if (card) result.cardAmount = (result.cardAmount || 0) + amount;
       else result.cashAmount = (result.cashAmount || 0) + amount;
     }
@@ -178,10 +181,34 @@ export function parsePartnerkaartCsv(text: string): ParsedReceipt | null {
     );
   if (
     result.total !== null &&
-    (result.cardAmount !== null || result.cashAmount !== null) &&
-    (result.cardAmount || 0) + (result.cashAmount || 0) !== result.total
+    (result.cardAmount !== null ||
+      result.cashAmount !== null ||
+      bonusAmount > 0) &&
+    (result.cardAmount || 0) + (result.cashAmount || 0) + bonusAmount !==
+      result.total
   )
     issues.push("Payment amounts do not reconcile with the receipt total.");
+  // Match and categorize the amount actually paid, as for redeemed Rimi
+  // money. Validate the original basket and tenders before reducing it.
+  if (bonusAmount > 0 && issues.length === 0 && result.total !== null) {
+    const products = items.filter(
+      (item) => item.amount > 0 && item.categoryId !== "deposits",
+    );
+    if (bonusAmount > products.reduce((sum, item) => sum + item.amount, 0))
+      issues.push(
+        "Redeemed Partnerkaart bonus money exceeds the product total.",
+      );
+    else {
+      const shares = prorate(
+        products.map((item) => item.amount),
+        -bonusAmount,
+      );
+      products.forEach((item, i) => {
+        item.amount += shares[i];
+      });
+      result.total -= bonusAmount;
+    }
+  }
   result.valid = issues.length === 0;
   return result;
 }
