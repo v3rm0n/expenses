@@ -39,7 +39,12 @@ import {
   storageFile,
   storeReceipt,
 } from "./receipts";
-import { MAX_EMAIL_SIZE, receiveEmail, type EmailConfig } from "./email";
+import {
+  MAX_EMAIL_SIZE,
+  receiveEmail,
+  readEmailMessage,
+  type EmailConfig,
+} from "./email";
 import {
   applyAllocations,
   autoMatchReceipt,
@@ -964,6 +969,8 @@ export async function handleApi(
           "SELECT id,sender,subject,status,error,receipt_ids,received_at FROM inbound_emails ORDER BY received_at DESC LIMIT 100",
         ),
       );
+    if (segments[0] === "emails" && segments.length === 2 && method === "GET")
+      return json(await readEmailMessage(uuid(segments[1])));
     if (
       segments[0] === "emails" &&
       segments[2] === "file" &&

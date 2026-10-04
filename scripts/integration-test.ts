@@ -43,7 +43,8 @@ const { storeReceipt, processReceipt, extractDocument } =
   await import("../src/server/receipts");
 const { overview, receiptDetail, receiptPage, receiptList } =
   await import("../src/server/reporting");
-const { receiveEmail, processEmail } = await import("../src/server/email");
+const { receiveEmail, processEmail, readEmailMessage } =
+  await import("../src/server/email");
 const { applyAllocations, linkReceipt, reclassify } =
   await import("../src/server/ledger");
 const { getQueue } = await import("../src/server/queue");
@@ -609,6 +610,45 @@ try {
       510,
     );
   });
+  await check(
+    "forwarding verification preserves the message without importing receipts",
+    async () => {
+      const raw = Buffer.from(
+        "From: forwarding-noreply@google.com\r\nSubject: Gmail Forwarding Confirmation\r\nContent-Type: text/plain\r\n\r\nConfirmation code: 012345678\nhttps://mail.google.com/mail/vf-test-token",
+      );
+      const before = (
+        await query("SELECT count(*)::int AS count FROM receipts")
+      )[0].count;
+      const email = await receiveEmail(raw);
+      await processEmail(email.id);
+      await processEmail(email.id);
+      assert.deepEqual(
+        (
+          await query(
+            "SELECT status,error,receipt_ids FROM inbound_emails WHERE id=$1",
+            [email.id],
+          )
+        )[0],
+        {
+          status: "verification",
+          error: null,
+          receipt_ids: [],
+        },
+      );
+      assert.equal(
+        (await query("SELECT count(*)::int AS count FROM receipts"))[0].count,
+        before,
+      );
+      assert.deepEqual(await receiveEmail(raw), {
+        id: email.id,
+        status: "verification",
+      });
+      assert.deepEqual((await readEmailMessage(email.id)).verification, {
+        code: "012345678",
+        url: "https://mail.google.com/mail/vf-test-token",
+      });
+    },
+  );
   await check("forwarded MIME bodies import idempotently", async () => {
     const raw = Buffer.from(
       `From: receipts@example.com\r\nTo: me@example.com\r\nSubject: Rimi receipt\r\nMessage-ID: <fixture@example.com>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${receiptText("Rimi", "email")}`,

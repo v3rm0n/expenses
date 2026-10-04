@@ -85,6 +85,30 @@ test("owner setup, cash ledger, receipt corrections and mobile overview", async 
     "expenses-test-email-token-only",
   );
   await page.getByRole("button", { name: "Hide bridge token" }).click();
+  const verification = await page.request.post("/api/inbound/email", {
+    headers: {
+      Authorization: "Bearer expenses-test-email-token-only",
+      "Content-Type": "message/rfc822",
+    },
+    data: "From: forwarding-noreply@google.com\r\nSubject: Gmail Forwarding Confirmation\r\nContent-Type: text/plain\r\n\r\nConfirmation code: 012345678\nhttps://mail.google.com/mail/vf-test-token",
+  });
+  expect(verification.status()).toBe(202);
+  await page.reload();
+  const verificationRow = page
+    .getByRole("row")
+    .filter({ hasText: "Gmail Forwarding Confirmation" });
+  await expect(
+    verificationRow.getByText("verification", { exact: true }),
+  ).toBeVisible({ timeout: 30000 });
+  await verificationRow.getByRole("button", { name: "Open message" }).click();
+  await expect(page.locator(".email-message code")).toHaveText("012345678");
+  await expect(
+    page.getByRole("link", { name: "Open Gmail confirmation" }),
+  ).toHaveAttribute("href", "https://mail.google.com/mail/vf-test-token");
+  await expect(
+    verificationRow.getByRole("button", { name: "Retry" }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Close message" }).click();
   await page.getByRole("button", { name: "Rules", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Create a rule" }),

@@ -31,6 +31,7 @@ import {
   type Category,
 } from "./ui";
 import { formatMoney, parseMoney } from "../lib/money";
+import type { EmailMessage } from "../lib/email-message";
 
 type Bank = { name: string; country: string; maximum_consent_validity: number };
 type Connection = {
@@ -585,6 +586,11 @@ type Settings = {
   } | null;
 };
 export function SettingsView({ context: ctx }: { context: AppContext }) {
+  const [selectedEmail, setSelectedEmail] = useState<string | null>(null);
+  const message = useData<EmailMessage>(
+    selectedEmail ? `emails/${selectedEmail}` : null,
+    ctx.revision,
+  );
   const settings = useData<Settings>("settings", ctx.revision, 30000),
     emails = useData<
       Array<{
@@ -762,9 +768,87 @@ export function SettingsView({ context: ctx }: { context: AppContext }) {
       <section className="panel">
         <SectionTitle
           title="Received email"
-          description="Original messages are kept for review."
+          description="Open forwarding confirmations here to read the code or follow Gmail’s confirmation link."
         />
         <ErrorMessage message={emails.error} />
+        <div className="padded-form">
+          <p className="muted small">
+            Add your receipt address in Gmail’s forwarding settings, then open
+            the confirmation email below. Copy its code into Gmail or open the
+            confirmation link, then return to Gmail to enable forwarding or
+            create a filter for receipts. For IMAP, use Check now to fetch it.
+          </p>
+        </div>
+        {selectedEmail && (
+          <div className="email-message source-details" aria-live="polite">
+            <div className="button-row">
+              <strong>{message.data?.subject || "Loading email…"}</strong>
+              <button
+                className="text-link"
+                onClick={() => setSelectedEmail(null)}
+              >
+                Close message
+              </button>
+            </div>
+            <ErrorMessage message={message.error} />
+            {message.loading && !message.data && <Loading />}
+            {message.data && (
+              <>
+                <p className="muted small">{message.data.sender}</p>
+                {message.data.verification && (
+                  <div className="notice">
+                    <div>
+                      <strong>Forwarding verification</strong>
+                      <p>
+                        Confirm only if you requested this forwarding setup.
+                      </p>
+                      <div className="button-row">
+                        {message.data.verification.code && (
+                          <>
+                            <code>{message.data.verification.code}</code>
+                            <button
+                              className="button secondary small-button"
+                              onClick={async () => {
+                                try {
+                                  await navigator.clipboard.writeText(
+                                    message.data!.verification!.code!,
+                                  );
+                                  ctx.notify("Confirmation code copied.");
+                                } catch {
+                                  setError(
+                                    "Could not copy the code. Select and copy it manually.",
+                                  );
+                                }
+                              }}
+                            >
+                              <Copy size={14} />
+                              Copy code
+                            </button>
+                          </>
+                        )}
+                        {message.data.verification.url && (
+                          <a
+                            className="button secondary small-button"
+                            href={message.data.verification.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            Open Gmail confirmation
+                            <ArrowUpRight size={14} />
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <pre>
+                  {message.data.text ||
+                    "This email has no readable message body. Download the original to inspect its attachments."}
+                </pre>
+              </>
+            )}
+          </div>
+        )}
         {emails.loading && !emails.data ? (
           <Loading />
         ) : !emails.data?.length ? (
@@ -810,13 +894,21 @@ export function SettingsView({ context: ctx }: { context: AppContext }) {
                     </td>
                     <td>
                       <div className="button-row">
+                        <button
+                          className="text-link"
+                          onClick={() => setSelectedEmail(email.id)}
+                        >
+                          Open message
+                        </button>
                         <a
                           className="text-link"
                           href={`/api/emails/${email.id}/file`}
                         >
                           Original
                         </a>
-                        {email.status !== "complete" && (
+                        {!["complete", "verification"].includes(
+                          email.status,
+                        ) && (
                           <button
                             className="text-link"
                             onClick={async () => {

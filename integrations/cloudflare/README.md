@@ -31,4 +31,6 @@ Inbound messages are limited to 20 MB, below KV’s per-value maximum. KV and Em
 
 Email Routing is currently free for inbound mail; Workers/KV are limited by their free tiers. See [Email pricing](https://developers.cloudflare.com/email-service/platform/pricing/), [KV quotas](https://developers.cloudflare.com/kv/platform/pricing/), and the [Email handler API](https://developers.cloudflare.com/email-service/api/route-emails/email-handler/). This receives forwarded messages without operating an SMTP server or a mailbox API.
 
-Only mail containing an actual receipt attachment or receipt body can be parsed. Retailer sign-in links remain for manual export/review.
+For Gmail forwarding, first add the custom receipt address in Gmail’s forwarding settings. Its confirmation message is delivered through the same Worker. Open **Settings → Received email → Open message** in the app, copy the confirmation code or open the Gmail confirmation link, then finish the forwarding setup in Gmail. The app retains verification messages separately from receipts.
+
+Only mail containing an actual receipt attachment or receipt body can be parsed as a receipt. Retailer sign-in links remain for manual export/review.

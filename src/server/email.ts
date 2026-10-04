@@ -10,6 +10,7 @@ import { AppError } from "./errors";
 import { enqueue } from "./queue";
 import { MAX_FILE_SIZE, storeReceipt, storageFile } from "./receipts";
 import { woltEmailOrder } from "../lib/wolt-receipt";
+import { emailMessage } from "../lib/email-message";
 
 export const MAX_EMAIL_SIZE = 20 * 1024 * 1024;
 export async function receiveEmail(buffer: Buffer) {
@@ -26,13 +27,14 @@ export async function receiveEmail(buffer: Buffer) {
     "INSERT INTO inbound_emails(source_key,storage_path) VALUES($1,$2) ON CONFLICT(source_key) DO UPDATE SET source_key=excluded.source_key RETURNING id,status",
     [hash, relative],
   );
-  if (!["complete", "review"].includes(email.status))
+  if (!["complete", "review", "verification"].includes(email.status))
     await enqueue("email-parse", { emailId: email.id }, email.id);
   return { id: email.id, status: email.status };
 }
 export async function processEmail(id: string) {
   const [row] = await query("SELECT * FROM inbound_emails WHERE id=$1", [id]);
-  if (!row || row.status === "complete" || row.status === "review") return;
+  if (!row || ["complete", "review", "verification"].includes(row.status))
+    return;
   const ids: string[] = [];
   try {
     const raw = await readFile(storageFile(row.storage_path));
@@ -40,6 +42,18 @@ export async function processEmail(id: string) {
       skipHtmlToText: true,
       skipTextToHtml: true,
     });
+    if (emailMessage(email).verification) {
+      await query(
+        "UPDATE inbound_emails SET sender=$2,subject=$3,message_id=$4,receipt_ids='[]',status='verification',error=NULL,processed_at=now() WHERE id=$1",
+        [
+          id,
+          email.from?.text?.slice(0, 500) || null,
+          email.subject?.slice(0, 500) || null,
+          email.messageId || null,
+        ],
+      );
+      return;
+    }
     const bodyParts: string[] = [];
     const collect = async (
       parsed: Awaited<ReturnType<typeof simpleParser>>,
@@ -140,6 +154,19 @@ export async function processEmail(id: string) {
     );
     throw new AppError("The email could not be processed.", 502);
   }
+}
+export async function readEmailMessage(id: string) {
+  const [row] = await query(
+    "SELECT storage_path FROM inbound_emails WHERE id=$1",
+    [id],
+  );
+  if (!row) throw new AppError("Email not found.", 404);
+  return emailMessage(
+    await simpleParser(await readFile(storageFile(row.storage_path)), {
+      skipHtmlToText: true,
+      skipTextToHtml: true,
+    }),
+  );
 }
 export type EmailConfig = {
   host: string;

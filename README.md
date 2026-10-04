@@ -111,7 +111,9 @@ Settings always shows the Received email section. A delivered email appears even
 
 Alternatively, configure a dedicated existing or self-hosted IMAP mailbox in **Settings**. TLS is supported; use an app password or an OAuth access token. The app opens the folder read-only without marking messages seen or deleting them. Polling runs hourly and imports up to 100 messages per check, starting with the last 30 days on a new mailbox. OAuth tokens currently require manual renewal; provider refresh-token flows are not implemented. Credential changes reset the mailbox cursor, with document hashes retaining deduplication.
 
-Email ingestion preserves the raw message, extracts supported attachments or a readable receipt body, and queues receipt processing separately. Raw email downloads and retries are available in Settings. Choose the Cloudflare bridge or a dedicated IMAP mailbox for your installation.
+To set up Gmail forwarding, add your receipt address in Gmail’s forwarding settings. Google sends a confirmation email to that address. Open **Settings → Received email → Open message** to read it, copy the confirmation code, or open the Gmail confirmation link. Then return to Gmail to enable forwarding or create a receipt filter. For IMAP, use **Check now** to fetch the confirmation. Forwarding confirmations have a separate `verification` status and do not create receipts. Previously received messages in Review can also be opened. Message bodies are displayed as plain text without loading remote images.
+
+Email ingestion preserves the raw message, extracts supported attachments or a readable receipt body, and queues receipt processing separately. Message viewing, raw email downloads, and retries are available in Settings. Choose the Cloudflare bridge or a dedicated IMAP mailbox for your installation.
 
 ## Classification and reporting
 
