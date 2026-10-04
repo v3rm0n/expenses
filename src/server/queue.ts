@@ -17,6 +17,7 @@ export async function getQueue() {
         "receipt-parse",
         "email-parse",
         "imap-sync",
+        "lidl-sync",
         "maintenance",
       ])
         await boss.createQueue(name, {

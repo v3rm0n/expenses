@@ -106,3 +106,13 @@ INSERT INTO schema_migrations(version) VALUES(1) ON CONFLICT DO NOTHING;
 
 ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_kind_check;
 ALTER TABLE transactions ADD CONSTRAINT transactions_kind_check CHECK(kind IN ('expense','income','refund','transfer','cash_movement','investment','pension'));
+
+-- External retailer identities prevent downloading the same receipt each day.
+CREATE TABLE IF NOT EXISTS retailer_receipts (
+  retailer text NOT NULL,
+  account_key text NOT NULL,
+  external_id text NOT NULL,
+  receipt_id uuid NOT NULL REFERENCES receipts(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (retailer, account_key, external_id)
+);

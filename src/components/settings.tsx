@@ -573,6 +573,13 @@ type Settings = {
   bankingConfigured: boolean;
   workerAt: string | null;
   inboundUrl: string;
+  lidl: {
+    user: string;
+    enabled: boolean;
+    hasPassword: boolean;
+    lastSyncAt: string | null;
+    error: string | null;
+  } | null;
   mailbox: {
     host: string;
     port: number;
@@ -758,6 +765,13 @@ export function SettingsView({ context: ctx }: { context: AppContext }) {
           </div>
         </section>
       </div>
+      <section className="panel">
+        <SectionTitle
+          title="Lidl Plus receipts"
+          description="Import digital purchase receipts from your Lidl Estonia account daily."
+        />
+        <LidlForm context={ctx} connection={s.lidl} />
+      </section>
       <section className="panel">
         <SectionTitle
           title="Connect an existing mailbox"
@@ -1030,6 +1044,131 @@ export function SettingsView({ context: ctx }: { context: AppContext }) {
         )}
       </section>
     </div>
+  );
+}
+function LidlForm({
+  context: ctx,
+  connection,
+}: {
+  context: AppContext;
+  connection: Settings["lidl"];
+}) {
+  const [user, setUser] = useState(connection?.user || "");
+  const [password, setPassword] = useState("");
+  const [enabled, setEnabled] = useState(connection?.enabled ?? true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function act(action: () => Promise<unknown>, message: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+      ctx.refresh();
+      ctx.notify(message);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <form
+      className="padded-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void act(
+          async () => {
+            await api("settings/lidl", { user, password, enabled });
+            setPassword("");
+          },
+          enabled
+            ? "Lidl connection saved and import queued."
+            : "Lidl automatic imports paused.",
+        );
+      }}
+    >
+      <ErrorMessage message={error || connection?.error || null} />
+      <div className="form-grid">
+        <label>
+          Lidl email
+          <input
+            type="email"
+            value={user}
+            onChange={(e) => setUser(e.target.value)}
+            autoComplete="off"
+            required
+            maxLength={254}
+          />
+        </label>
+        <label>
+          Lidl password
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="new-password"
+            required={!connection?.hasPassword || user !== connection.user}
+            placeholder={
+              connection?.hasPassword
+                ? "Leave blank to keep saved password"
+                : "Account password"
+            }
+          />
+        </label>
+      </div>
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setEnabled(e.target.checked)}
+        />
+        Import receipts daily
+      </label>
+      <div className="button-row">
+        <button className="button primary" disabled={busy}>
+          {busy ? "Saving…" : "Save Lidl connection"}
+        </button>
+        {connection && (
+          <>
+            <button
+              type="button"
+              className="button secondary"
+              disabled={busy || !connection.enabled}
+              onClick={() =>
+                void act(
+                  () => api("settings/lidl/sync", {}),
+                  "Lidl import queued.",
+                )
+              }
+            >
+              <RefreshCw size={15} />
+              Import now
+            </button>
+            <button
+              type="button"
+              className="text-link"
+              disabled={busy}
+              onClick={() =>
+                void act(async () => {
+                  await api("settings/lidl", undefined, "DELETE");
+                  setPassword("");
+                }, "Lidl disconnected. Imported receipts are retained.")
+              }
+            >
+              Disconnect
+            </button>
+          </>
+        )}
+        <span className="muted small">
+          Last import: {dateTime(connection?.lastSyncAt)}
+        </span>
+      </div>
+      <p className="muted small">
+        Credentials and the saved sign-in session are encrypted. Imported
+        receipts use the same review and payment matching as uploads. Lidl may
+        require verification when signing in again.
+      </p>
+    </form>
   );
 }
 function MailboxForm({

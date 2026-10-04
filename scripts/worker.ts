@@ -4,6 +4,7 @@ import { migrate, pool, query } from "../src/server/db";
 import { getQueue, enqueue } from "../src/server/queue";
 import { syncBank } from "../src/server/banking";
 import { processReceipt } from "../src/server/receipts";
+import { syncLidl } from "../src/server/lidl";
 import { processEmail, syncImap } from "../src/server/email";
 assertConfig();
 await migrate();
@@ -31,6 +32,7 @@ await boss.work<{ emailId: string }>(
   },
 );
 await boss.work("imap-sync", { localConcurrency: 1 }, async () => syncImap());
+await boss.work("lidl-sync", { localConcurrency: 1 }, async () => syncLidl());
 async function maintenance() {
   await query(
     "INSERT INTO settings(key,value) VALUES('worker_heartbeat','true') ON CONFLICT(key) DO UPDATE SET updated_at=now()",
@@ -55,6 +57,14 @@ async function maintenance() {
     "SELECT id FROM inbound_emails WHERE status='received'",
   ))
     await enqueue("email-parse", { emailId: email.id }, email.id);
+  const [lidl] = await query("SELECT value FROM settings WHERE key='lidl'");
+  if (
+    lidl?.value?.cipher &&
+    decrypt<{ enabled: boolean }>(lidl.value.cipher).enabled &&
+    (!lidl.value.lastAttemptAt ||
+      new Date(lidl.value.lastAttemptAt).valueOf() < Date.now() - 86400000)
+  )
+    await enqueue("lidl-sync", {}, "lidl");
   const [mailbox] = await query("SELECT value FROM settings WHERE key='imap'");
   if (
     mailbox &&
@@ -73,7 +83,7 @@ await boss.schedule(
 );
 await maintenance();
 console.log(
-  "Import worker ready. Bank imports run daily; mailbox checks run hourly.",
+  "Import worker ready. Bank and Lidl imports run daily; mailbox checks run hourly.",
 );
 let stopped = false;
 async function stop() {

@@ -20,7 +20,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "backup": "tsx scripts/backup.ts",
-    "restore": "tsx scripts/restore.ts"
+    "restore": "tsx scripts/restore.ts",
+    "lidl:connect": "tsx scripts/lidl-connect.ts"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.10",
@@ -33,6 +34,7 @@
     "pdfjs-dist": "^6.3.289",
     "pg": "^8.16.3",
     "pg-boss": "^12.35.1",
+    "playwright": "^1.63.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tesseract.js": "^7.0.0",

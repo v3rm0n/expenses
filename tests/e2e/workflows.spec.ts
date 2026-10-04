@@ -406,3 +406,48 @@ test("filters survive detail navigation, CSV matches results, and mobile amounts
   await page.getByRole("button", { name: "Receipts", exact: true }).click();
   await expect(page.getByLabel("Currency", { exact: true })).toHaveCount(0);
 });
+
+test("Lidl connection settings keep passwords private and support pause and disconnect", async ({
+  page,
+}) => {
+  const headers = { Origin: "http://127.0.0.1:4318" };
+  await page.request.post("/api/auth/login", { data: { password }, headers });
+  await page.goto("/settings");
+  await page
+    .getByLabel("Lidl email", { exact: true })
+    .fill("lidl-test@example.com");
+  await page
+    .getByLabel("Lidl password", { exact: true })
+    .fill("private-lidl-test-password");
+  await page.getByLabel("Import receipts daily", { exact: true }).uncheck();
+  await page.getByRole("button", { name: "Save Lidl connection" }).click();
+  await expect(page.getByRole("status")).toHaveText(
+    "Lidl automatic imports paused.",
+  );
+  await expect(page.getByLabel("Lidl password", { exact: true })).toHaveValue(
+    "",
+  );
+  await expect(
+    page.getByRole("button", { name: "Import now", exact: true }),
+  ).toBeDisabled();
+  const settings = await (await page.request.get("/api/settings")).json();
+  expect(settings.lidl).toMatchObject({
+    user: "lidl-test@example.com",
+    enabled: false,
+    hasPassword: true,
+  });
+  expect(JSON.stringify(settings)).not.toContain("private-lidl-test-password");
+  expect(settings.lidl).not.toHaveProperty("cipher");
+  expect(settings.lidl).not.toHaveProperty("session");
+  await page.getByRole("button", { name: "Save Lidl connection" }).click();
+  await expect(page.getByRole("status")).toHaveText(
+    "Lidl automatic imports paused.",
+  );
+  await page.getByRole("button", { name: "Disconnect", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText(
+    "Lidl disconnected. Imported receipts are retained.",
+  );
+  expect(
+    (await (await page.request.get("/api/settings")).json()).lidl,
+  ).toBeNull();
+});

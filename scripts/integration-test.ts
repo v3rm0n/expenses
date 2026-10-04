@@ -59,6 +59,49 @@ const check = (message: string, fn: () => Promise<void>) =>
   });
 try {
   await migrate();
+  await check(
+    "Lidl credentials and sessions stay encrypted; account changes reset authentication",
+    async () => {
+      const { saveLidl, lidlStatus } = await import("../src/server/lidl");
+      const { decrypt } = await import("../src/server/crypto");
+      await saveLidl({
+        user: "test@example.com",
+        password: "test-password",
+        enabled: false,
+      });
+      let [setting] = await query(
+        "SELECT value FROM settings WHERE key='lidl'",
+      );
+      assert.ok(!JSON.stringify(setting.value).includes("test-password"));
+      assert.equal(
+        decrypt<{ password: string }>(setting.value.cipher).password,
+        "test-password",
+      );
+      assert.equal((await lidlStatus())?.hasPassword, true);
+      assert.ok(!JSON.stringify(await lidlStatus()).includes("test-password"));
+      await saveLidl({ user: "test@example.com", enabled: true });
+      [setting] = await query("SELECT value FROM settings WHERE key='lidl'");
+      assert.equal(
+        decrypt<{ password: string }>(setting.value.cipher).password,
+        "test-password",
+      );
+      await assert.rejects(
+        saveLidl({ user: "other@example.com", enabled: true }),
+        /password/,
+      );
+      await saveLidl({
+        user: "other@example.com",
+        password: "replacement",
+        enabled: false,
+      });
+      [setting] = await query("SELECT value FROM settings WHERE key='lidl'");
+      assert.equal(
+        decrypt<{ password: string }>(setting.value.cipher).password,
+        "replacement",
+      );
+      await query("DELETE FROM settings WHERE key='lidl'");
+    },
+  );
   const [account] = await query(
     "INSERT INTO accounts(identification_hash,iban,name,currency) VALUES('wallet:EUR','EEOWNER','Revolut EUR','EUR') RETURNING id",
   );

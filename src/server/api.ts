@@ -33,6 +33,7 @@ import {
   startBankAuthorization,
 } from "./banking";
 import { enqueue } from "./queue";
+import { lidlStatus, saveLidl } from "./lidl";
 import {
   MAX_FILE_SIZE,
   replaceReceiptItems,
@@ -848,6 +849,7 @@ export async function handleApi(
         bankingConfigured: Boolean(config.bankingId && config.bankingKeyPath),
         workerAt: heartbeat?.updated_at || null,
         inboundUrl: `${config.appUrl}/api/inbound/email`,
+        lidl: await lidlStatus(),
         mailbox: options
           ? {
               host: options.host,
@@ -863,6 +865,32 @@ export async function handleApi(
             }
           : null,
       });
+    }
+    if (route === "settings/lidl" && method === "POST") {
+      const input = z
+        .object({
+          user: z
+            .email()
+            .max(254)
+            .transform((value) => value.toLowerCase()),
+          password: z.string().max(1000).optional(),
+          enabled: z.boolean(),
+        })
+        .parse(await request.json());
+      await saveLidl(input);
+      if (input.enabled) await enqueue("lidl-sync", {}, "lidl");
+      return json({ ok: true }, 202);
+    }
+    if (route === "settings/lidl/sync" && method === "POST") {
+      const status = await lidlStatus();
+      if (!status?.enabled)
+        throw new AppError("Enable the Lidl connection first.");
+      await enqueue("lidl-sync", {}, "lidl");
+      return json({ ok: true }, 202);
+    }
+    if (route === "settings/lidl" && method === "DELETE") {
+      await query("DELETE FROM settings WHERE key='lidl'");
+      return json({ ok: true });
     }
     if (route === "settings/inbound-token" && method === "POST")
       return json({ token: config.inboundToken });
