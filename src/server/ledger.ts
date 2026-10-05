@@ -175,10 +175,9 @@ export async function autoMatchReceipt(receiptId: string, db: DB = pool) {
   )
     return;
   if (receipt.retailer === "wolt") {
-    // Wolt invoices can cover only the food or only the delivery fees. The
-    // email's full order total must reconcile before matching a bank payment.
-    if (receipt.order_id && receipt.order_total !== null)
-      await autoMatchWoltOrder(receipt.order_id, db);
+    // Wolt issues separate food and delivery invoices with the same order ID.
+    // Match the complete group, never an unverified single subtotal.
+    if (receipt.order_id) await autoMatchWoltOrder(receipt.order_id, db);
     return;
   }
   if (
@@ -227,26 +226,26 @@ async function autoMatchWoltOrder(orderId: string, db: DB) {
     db,
   );
   const first = receipts[0];
+  const knownTotals = receipts
+    .map((receipt) => receipt.order_total)
+    .filter((total) => total !== null);
+  const total = receipts.reduce((sum, receipt) => sum + receipt.total, 0);
   if (
     !first ||
-    !first.order_total ||
+    (!knownTotals.length && receipts.length < 2) ||
+    knownTotals.some((knownTotal) => knownTotal !== total) ||
     !first.purchased_at ||
     receipts.some(
       (receipt) =>
         receipt.status !== "ready" ||
-        receipt.order_total !== first.order_total ||
-        receipt.order_currency !== first.order_currency ||
-        receipt.currency !== first.order_currency ||
+        (receipt.order_currency !== null &&
+          receipt.order_currency !== first.currency) ||
+        receipt.currency !== first.currency ||
         receipt.purchased_at !== first.purchased_at ||
         receipt.total <= 0 ||
         receipt.card_amount !== receipt.total ||
         (receipt.cash_amount || 0) !== 0,
     )
-  )
-    return;
-  if (
-    receipts.reduce((sum, receipt) => sum + receipt.total, 0) !==
-    first.order_total
   )
     return;
   if (
@@ -263,7 +262,7 @@ async function autoMatchWoltOrder(orderId: string, db: DB) {
     `SELECT t.id FROM transactions t WHERE t.status='BOOK' AND t.currency=$1 AND t.amount=$2 AND t.kind='expense'
     AND t.booked_at BETWEEN $3::date-1 AND $3::date+7 AND t.merchant ILIKE '%wolt%'
     AND NOT EXISTS(SELECT 1 FROM receipt_payments p WHERE p.transaction_id=t.id)`,
-    [first.order_currency, -first.order_total, first.purchased_at],
+    [first.currency, -total, first.purchased_at],
     db,
   );
   if (candidates.length === 1)

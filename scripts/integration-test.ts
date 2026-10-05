@@ -45,7 +45,7 @@ const { overview, receiptDetail, receiptPage, receiptList } =
   await import("../src/server/reporting");
 const { receiveEmail, processEmail, readEmailMessage } =
   await import("../src/server/email");
-const { applyAllocations, linkReceipt, reclassify } =
+const { applyAllocations, autoMatchReceipt, linkReceipt, reclassify } =
   await import("../src/server/ledger");
 const { getQueue } = await import("../src/server/queue");
 const { writeBackup, restoreBackup } = await import("./archive");
@@ -1194,6 +1194,157 @@ KUUPÄEV: 02.10.2026`;
           )
         )[0].n,
         2,
+      );
+    },
+  );
+  await check(
+    "uploaded Wolt food and delivery PDFs match their combined next-day payment without email metadata",
+    async () => {
+      const orderId = "223456789abcdef012345678";
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [
+            {
+              ...bank("wolt-july-combined", "68.92", "Wolt"),
+              booking_date: "2026-07-02",
+            },
+            {
+              ...bank("wolt-july-subtotal", "65.83", "Wolt"),
+              booking_date: "2026-07-02",
+            },
+          ],
+          db,
+        ),
+      );
+      const makeText = (delivery: boolean) =>
+        woltReceiptText(delivery, orderId)
+          .replace("02.10.2026", "01.07.2026")
+          .replace(
+            `Apple Pay ${delivery ? "1.40" : "6.00"}`,
+            `Apple Pay ${delivery ? "3.09" : "65.83"}`,
+          )
+          .replace(
+            /Item VAT %[\s\S]*?Total in EUR \(incl\. VAT\) [\d.]+/,
+            `Item VAT % Quantity Gross unit price Price\n${delivery ? "Service fee 24% 1 3.09 3.09" : "Food 24% 1 65.83 65.83"}\nTotal in EUR (incl. VAT) ${delivery ? "3.09" : "65.83"}`,
+          );
+      const food = await storeReceipt(
+        textPdf(makeText(false)),
+        "july-wolt-food.pdf",
+      );
+      await processReceipt(food.id);
+      assert.equal(
+        (
+          await query(
+            "SELECT count(*)::int AS n FROM receipt_payments WHERE receipt_id=$1",
+            [food.id],
+          )
+        )[0].n,
+        0,
+      );
+      const delivery = await storeReceipt(
+        textPdf(makeText(true)),
+        "july-wolt-delivery.pdf",
+      );
+      await processReceipt(delivery.id);
+      const links = await query(
+        "SELECT p.transaction_id,p.amount,t.booked_at,t.amount AS payment_amount FROM receipt_payments p JOIN transactions t ON t.id=p.transaction_id WHERE receipt_id=ANY($1::uuid[]) ORDER BY p.amount",
+        [[food.id, delivery.id]],
+      );
+      assert.deepEqual(
+        links.map((link) => link.amount),
+        [309, 6583],
+      );
+      assert.equal(links[0].transaction_id, links[1].transaction_id);
+      assert.equal(links[0].booked_at, "2026-07-02");
+      assert.equal(links[0].payment_amount, -6892);
+      assert.equal(
+        (
+          await query(
+            "SELECT sum(amount)::bigint AS amount FROM allocations WHERE transaction_id=$1",
+            [links[0].transaction_id],
+          )
+        )[0].amount,
+        6892,
+      );
+      await transaction(async (db) => {
+        await autoMatchReceipt(food.id, db);
+        await autoMatchReceipt(delivery.id, db);
+      });
+      assert.equal(
+        (
+          await query(
+            "SELECT count(*)::int AS n FROM receipt_payments WHERE receipt_id=ANY($1::uuid[])",
+            [[food.id, delivery.id]],
+          )
+        )[0].n,
+        2,
+      );
+    },
+  );
+  await check(
+    "Wolt PDF groups stay unlinked when the combined payment is ambiguous or known totals conflict",
+    async () => {
+      const orderId = "323456789abcdef012345678";
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [
+            {
+              ...bank("wolt-ambiguous-1", "7.40", "Wolt"),
+              booking_date: "2026-05-02",
+            },
+            {
+              ...bank("wolt-ambiguous-2", "7.40", "Wolt"),
+              booking_date: "2026-05-02",
+            },
+          ],
+          db,
+        ),
+      );
+      const ids: string[] = [];
+      for (const delivery of [false, true]) {
+        const receipt = await storeReceipt(
+          textPdf(
+            woltReceiptText(delivery, orderId).replace(
+              "02.10.2026",
+              "01.05.2026",
+            ),
+          ),
+          `ambiguous-${delivery}.pdf`,
+        );
+        ids.push(receipt.id);
+        await processReceipt(receipt.id);
+      }
+      assert.equal(
+        (
+          await query(
+            "SELECT count(*)::int AS n FROM receipt_payments WHERE receipt_id=ANY($1::uuid[])",
+            [ids],
+          )
+        )[0].n,
+        0,
+      );
+      // Resolve payment ambiguity, but introduce a known email total that does
+      // not equal the PDFs. It must still refuse to match the inferred sum.
+      const removed = await query(
+        "DELETE FROM transactions WHERE source_reference=$1 RETURNING id",
+        ["wolt-ambiguous-2"],
+      );
+      assert.equal(removed.length, 1);
+      await query(
+        "UPDATE receipts SET order_total=800,order_currency='EUR' WHERE id=$1",
+        [ids[0]],
+      );
+      await transaction((db) => autoMatchReceipt(ids[0], db));
+      assert.equal(
+        (
+          await query(
+            "SELECT count(*)::int AS n FROM receipt_payments WHERE receipt_id=ANY($1::uuid[])",
+            [ids],
+          )
+        )[0].n,
+        0,
       );
     },
   );
