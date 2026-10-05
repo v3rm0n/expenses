@@ -117,7 +117,12 @@ export async function downloadAmazonInvoices(options: {
           const invoice = card.querySelector<HTMLAnchorElement>(
             'a[href*="/invoice/popover"]',
           );
-          const orderId = card.textContent?.match(/\b\d{3}-\d{7}-\d{7}\b/)?.[0];
+          const orderId =
+            (invoice &&
+              new URL(invoice.getAttribute("href")!, origin).searchParams
+                .get("orderId")
+                ?.match(/^\d{3}-\d{7}-\d{7}$/)?.[0]) ||
+            card.textContent?.match(/\b\d{3}-\d{7}-\d{7}\b/)?.[0];
           const date = card.textContent?.match(
             /\b(\d{1,2})\s+([A-Za-z]+)\s+(20\d{2})\b/,
           );
