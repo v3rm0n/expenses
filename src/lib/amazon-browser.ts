@@ -108,7 +108,9 @@ export async function downloadAmazonInvoices(options: {
         const cards = [...doc.querySelectorAll(".order-card")];
         if (
           !cards.length &&
-          !/no orders|haven.t placed|0 orders/i.test(doc.body.textContent || "")
+          !/\bno orders\b|haven.t placed|\b0 orders\b/i.test(
+            doc.body.textContent || "",
+          )
         )
           throw new Error(
             "Amazon returned an unfamiliar order page. No orders were treated as imported.",
