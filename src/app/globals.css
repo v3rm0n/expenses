@@ -852,24 +852,6 @@ main {
 .attention-list > button > svg {
   color: #bac1b2;
 }
-.recurring-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  padding: 0 25px 25px;
-}
-.recurring-card {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 17px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.recurring-card span {
-  color: var(--muted);
-  font-size: 12px;
-}
 .empty {
   padding: 35px 24px;
   text-align: center;
@@ -2365,10 +2347,6 @@ input[type="color"]::-webkit-color-swatch {
   }
   .rule-row strong {
     font-size: 11px;
-  }
-  .recurring-grid {
-    grid-template-columns: 1fr;
-    padding: 0 18px 18px;
   }
   .email-review {
     padding: 18px;

@@ -97,16 +97,6 @@ export async function overview(month: string, currency: string) {
     FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE t.status='BOOK' AND t.currency=$1`,
     [currency],
   );
-  const recurring = await query(
-    `SELECT merchant,currency,count(distinct to_char(booked_at,'YYYY-MM'))::int AS months,
-    round(avg(-amount))::bigint AS amount,max(booked_at) AS last_payment FROM transactions WHERE kind='expense' AND status='BOOK'
-    AND currency=$1 AND booked_at >= $2::date-interval '12 months' GROUP BY merchant,currency
-    HAVING count(distinct to_char(booked_at,'YYYY-MM'))>=3 AND max(-amount)-min(-amount)<=avg(-amount)*0.1 ORDER BY amount DESC LIMIT 6`,
-    [currency, to],
-  );
-  const [confirmed] = await query(
-    "SELECT value FROM settings WHERE key='recurring'",
-  );
   return {
     month,
     currency,
@@ -127,12 +117,6 @@ export async function overview(month: string, currency: string) {
     recent: recent.rows,
     pending,
     cash,
-    recurring: recurring.map((item) => ({
-      ...item,
-      confirmed: (confirmed?.value || []).includes(
-        `${item.currency}:${item.merchant}`,
-      ),
-    })),
   };
 }
 export function transactionFilters(params: URLSearchParams) {
