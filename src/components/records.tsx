@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import { randomEntryId } from "../lib/ids";
+import { suggestedDescriptionPattern } from "../lib/similar-transactions";
 import {
   ArrowLeft,
   Plus,
@@ -411,6 +412,9 @@ export function TransactionDetailView({
     `transactions/${id}`,
     ctx.revision,
   );
+  const [applySimilar, setApplySimilar] = useState(false),
+    [includeManual, setIncludeManual] = useState(false),
+    [similarPattern, setSimilarPattern] = useState("");
   const [kind, setKind] = useState("expense"),
     [note, setNote] = useState(""),
     [automatic, setAutomatic] = useState(false),
@@ -419,8 +423,32 @@ export function TransactionDetailView({
     ),
     [saveError, setSaveError] = useState<string | null>(null),
     [busy, setBusy] = useState(false);
+  const canApplySimilar =
+    Boolean(data?.merchant.trim()) &&
+    !automatic &&
+    rows.length === 1 &&
+    kind === data?.kind &&
+    ["expense", "refund"].includes(kind);
+  const similar = useData<{
+    count: number;
+    examples: Array<{
+      id: string;
+      description: string;
+      booked_at: string;
+      amount: number;
+      currency: string;
+    }>;
+  }>(
+    applySimilar && canApplySimilar
+      ? `transactions/${id}/similar?${new URLSearchParams({ pattern: similarPattern, includeManual: String(includeManual) })}`
+      : null,
+    ctx.revision,
+  );
   useEffect(() => {
     if (data) {
+      setApplySimilar(false);
+      setIncludeManual(false);
+      setSimilarPattern(suggestedDescriptionPattern(data.description));
       setKind(data.kind);
       setNote(data.note);
       setAutomatic(false);
@@ -451,13 +479,20 @@ export function TransactionDetailView({
     setBusy(true);
     setSaveError(null);
     try {
-      await api(`transactions/${id}`, {
+      const result = await api<{ count: number }>(`transactions/${id}`, {
         kind,
         note,
         automatic,
         allocations: rows,
+        ...(applySimilar && canApplySimilar
+          ? { similarPattern, similarIncludeManual: includeManual }
+          : {}),
       });
-      ctx.notify("Transaction updated.");
+      ctx.notify(
+        applySimilar && canApplySimilar
+          ? `${result.count} transactions categorized.`
+          : "Transaction updated.",
+      );
       ctx.refresh();
     } catch (e) {
       setSaveError((e as Error).message);
@@ -629,6 +664,65 @@ export function TransactionDetailView({
                 </div>
               </>
             )}
+            {canApplySimilar && (
+              <div className="view-stack">
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={applySimilar}
+                    onChange={(e) => setApplySimilar(e.target.checked)}
+                  />
+                  Apply category to similar transactions
+                </label>
+                {applySimilar && (
+                  <>
+                    <label>
+                      Description contains
+                      <input
+                        value={similarPattern}
+                        maxLength={200}
+                        onChange={(e) => setSimilarPattern(e.target.value)}
+                        placeholder="Leave blank to match all payments to this merchant"
+                      />
+                    </label>
+                    <p className="form-help">
+                      Same merchant ({data.merchant}), payment type and
+                      currency, across all history. Receipt-linked payments are
+                      skipped. Manual corrections are kept unless included
+                      below. Each payment keeps its own amount and note.
+                    </p>
+                    <label className="checkbox">
+                      <input
+                        type="checkbox"
+                        checked={includeManual}
+                        onChange={(e) => setIncludeManual(e.target.checked)}
+                      />
+                      Include manually categorized transactions
+                    </label>
+                    <ErrorMessage message={similar.error} />
+                    {similar.loading ? (
+                      <Loading />
+                    ) : (
+                      similar.data && (
+                        <div aria-live="polite">
+                          <p>
+                            {similar.data.count} other matching transactions
+                            will be categorized on save.
+                          </p>
+                          {similar.data.examples.map((entry) => (
+                            <p className="form-help" key={entry.id}>
+                              {shortDate(entry.booked_at)} ·{" "}
+                              {entry.description || data.merchant} ·{" "}
+                              {formatMoney(entry.amount, entry.currency)}
+                            </p>
+                          ))}
+                        </div>
+                      )
+                    )}
+                  </>
+                )}
+              </div>
+            )}
             <label>
               Personal note
               <textarea
@@ -639,8 +733,22 @@ export function TransactionDetailView({
               />
             </label>
             <div className="button-row">
-              <button className="button primary" disabled={busy}>
-                {busy ? "Saving…" : "Save changes"}
+              <button
+                className="button primary"
+                disabled={
+                  busy ||
+                  (applySimilar &&
+                    canApplySimilar &&
+                    (similar.loading ||
+                      Boolean(similar.error) ||
+                      !similar.data))
+                }
+              >
+                {busy
+                  ? "Saving…"
+                  : applySimilar && canApplySimilar
+                    ? `Save and categorize ${1 + (similar.data?.count || 0)} transactions`
+                    : "Save changes"}
               </button>
               {data.source === "cash" && (
                 <button

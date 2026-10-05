@@ -3,6 +3,10 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { config } from "./config";
+import {
+  similarTransactions,
+  type SimilarTransaction,
+} from "./similar-transactions";
 import { query, transaction, migrate } from "./db";
 import {
   addSession,
@@ -249,6 +253,45 @@ export async function handleApi(
       });
       return json(result, 201);
     }
+    if (
+      segments[0] === "transactions" &&
+      segments.length === 3 &&
+      segments[2] === "similar" &&
+      method === "GET"
+    ) {
+      const [entry] = await query<SimilarTransaction>(
+        "SELECT * FROM transactions WHERE id=$1",
+        [uuid(segments[1])],
+      );
+      if (!entry) throw new AppError("Transaction not found.", 404);
+      const pattern = z
+        .string()
+        .trim()
+        .max(200)
+        .parse(params.get("pattern") || "");
+      const matches = await similarTransactions(
+        entry,
+        pattern,
+        undefined,
+        false,
+        params.get("includeManual") === "true",
+      );
+      return json({
+        count: matches.length,
+        examples: matches
+          .slice(0, 5)
+          .map(
+            ({ id, merchant, description, booked_at, amount, currency }) => ({
+              id,
+              merchant,
+              description,
+              booked_at,
+              amount,
+              currency,
+            }),
+          ),
+      });
+    }
     if (segments[0] === "transactions" && segments.length === 2) {
       const id = uuid(segments[1]);
       if (method === "DELETE") {
@@ -311,14 +354,18 @@ export async function handleApi(
             ]),
             note: z.string().max(2000).default(""),
             automatic: z.boolean().default(false),
+            similarPattern: z.string().trim().max(200).optional(),
+            similarIncludeManual: z.boolean().default(false),
             allocations: z
               .array(z.object({ category_id: identifier, amount: moneyInput }))
               .max(100)
               .default([]),
           })
           .parse(await request.json());
-        await transaction(async (db) => {
-          const [entry] = await query(
+        const count = await transaction(async (db) => {
+          if (input.similarPattern !== undefined)
+            await db.query("SELECT pg_advisory_xact_lock(4317004)");
+          const [entry] = await query<SimilarTransaction>(
             "SELECT * FROM transactions WHERE id=$1 FOR UPDATE",
             [id],
             db,
@@ -344,6 +391,33 @@ export async function handleApi(
             throw new AppError(
               "Unlink receipts before changing the payment type.",
             );
+          let matches: Awaited<ReturnType<typeof similarTransactions>> = [];
+          if (input.similarPattern !== undefined) {
+            if (
+              input.automatic ||
+              !["expense", "refund"].includes(input.kind) ||
+              input.kind !== entry.kind ||
+              input.allocations.length !== 1
+            )
+              throw new AppError(
+                "Choose one category and keep the payment type to categorize similar transactions.",
+              );
+            const amount = parseMoney(
+              input.allocations[0].amount,
+              entry.currency,
+            );
+            if (amount !== allocationAmount(input.kind, entry.amount))
+              throw new AppError(
+                "Category allocations must equal the expense amount.",
+              );
+            matches = await similarTransactions(
+              entry,
+              input.similarPattern,
+              db,
+              true,
+              input.similarIncludeManual,
+            );
+          }
           await db.query(
             "UPDATE transactions SET kind=$2,note=$3,manual=$4,updated_at=now() WHERE id=$1",
             [id, input.kind, input.note, !input.automatic],
@@ -382,8 +456,39 @@ export async function handleApi(
             "INSERT INTO corrections(entity,entity_id,change) VALUES('transaction',$1,$2)",
             [id, JSON.stringify(input)],
           );
+          for (const match of matches) {
+            const expected = allocationAmount(match.kind, match.amount);
+            await replaceAllocations(
+              match.id,
+              [
+                {
+                  categoryId: input.allocations[0].category_id,
+                  amount: expected,
+                  source: "manual",
+                },
+              ],
+              expected,
+              db,
+            );
+            await db.query(
+              "UPDATE transactions SET manual=true,updated_at=now() WHERE id=$1",
+              [match.id],
+            );
+            await db.query(
+              "INSERT INTO corrections(entity,entity_id,change) VALUES('transaction',$1,$2)",
+              [
+                match.id,
+                JSON.stringify({
+                  category_id: input.allocations[0].category_id,
+                  similarTo: id,
+                  pattern: input.similarPattern,
+                }),
+              ],
+            );
+          }
+          return matches.length + 1;
         });
-        return json({ ok: true });
+        return json({ ok: true, count });
       }
     }
     if (route === "receipts" && method === "GET")

@@ -451,3 +451,156 @@ test("Lidl connection settings keep passwords private and support pause and disc
     (await (await page.request.get("/api/settings")).json()).lidl,
   ).toBeNull();
 });
+
+test("bulk categorization spans history, keeps each amount and preserves manual corrections", async ({
+  page,
+}) => {
+  const headers = { Origin: "http://127.0.0.1:4318" };
+  await page.request.post("/api/auth/login", { data: { password }, headers });
+  const merchant = `Bulk test ${randomUUID().slice(0, 8)}`;
+  const create = async (
+    amount: string,
+    date: string,
+    automatic: boolean,
+    currency = "EUR",
+    kind = "expense",
+  ) => {
+    const response = await page.request.post("/api/transactions", {
+      headers,
+      data: {
+        merchant,
+        amount,
+        date,
+        currency,
+        kind,
+        category: "uncategorized",
+        idempotencyKey: randomUUID(),
+      },
+    });
+    expect(response.status()).toBe(201);
+    const { id } = await response.json();
+    if (automatic) {
+      const reset = await page.request.post(`/api/transactions/${id}`, {
+        headers,
+        data: { kind, automatic: true },
+      });
+      expect(reset.ok()).toBe(true);
+    }
+    return id;
+  };
+  const source = await create("3.00", "2026-10-01", false);
+  const peer = await create("4.50", "2026-09-01", true);
+  const manual = await create("7.00", "2026-08-01", false);
+  const foreign = await create("5.00", "2026-07-01", true, "USD");
+  const refund = await create("2.00", "2026-06-01", true, "EUR", "refund");
+  const linked = await create("5.10", "2026-10-02", true);
+  const upload = await page.request.post("/api/receipts/upload", {
+    headers,
+    multipart: {
+      files: {
+        name: "bulk-receipt.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from(receiptText("Rimi", `bulk-${randomUUID()}`)),
+      },
+    },
+  });
+  const receiptId = (await upload.json()).results[0].id;
+  expect(receiptId).toBeTruthy();
+  await expect
+    .poll(
+      async () =>
+        (await (await page.request.get(`/api/receipts/${receiptId}`)).json())
+          .status,
+    )
+    .toBe("ready");
+  const link = await page.request.post(`/api/receipts/${receiptId}/link`, {
+    headers,
+    data: { transactionId: linked, amount: "5.10" },
+  });
+  expect(link.ok()).toBe(true);
+  const detail = async (id: string) =>
+    (await page.request.get(`/api/transactions/${id}`)).json();
+  const protectedIds = [manual, foreign, refund, linked];
+  const before = await Promise.all(protectedIds.map(detail));
+  await page.goto(`/transactions/${source}`);
+  await page
+    .getByLabel("Category 1", { exact: true })
+    .selectOption("subscriptions");
+  await page
+    .getByLabel("Apply category to similar transactions", { exact: true })
+    .check();
+  await expect(
+    page.getByText(
+      "1 other matching transactions will be categorized on save.",
+    ),
+  ).toBeVisible();
+  await page
+    .getByLabel("Include manually categorized transactions", { exact: true })
+    .check();
+  await expect(
+    page.getByText(
+      "2 other matching transactions will be categorized on save.",
+    ),
+  ).toBeVisible();
+  await page
+    .getByLabel("Include manually categorized transactions", { exact: true })
+    .uncheck();
+  await expect(
+    page.getByText(
+      "1 other matching transactions will be categorized on save.",
+    ),
+  ).toBeVisible();
+  await page
+    .getByRole("button", {
+      name: "Save and categorize 2 transactions",
+      exact: true,
+    })
+    .click();
+  await expect(page.getByRole("status")).toHaveText(
+    "2 transactions categorized.",
+  );
+  expect((await detail(source)).allocations).toMatchObject([
+    { category_id: "subscriptions", amount: 300, source: "manual" },
+  ]);
+  const matched = await detail(peer);
+  expect(matched.allocations).toMatchObject([
+    { category_id: "subscriptions", amount: 450, source: "manual" },
+  ]);
+  expect(matched.manual).toBe(true);
+  for (const [index, id] of protectedIds.entries()) {
+    const after = await detail(id);
+    expect(after.allocations).toEqual(before[index].allocations);
+    expect(after.kind).toBe(before[index].kind);
+    expect(after.receipts).toEqual(before[index].receipts);
+  }
+  const invalid = await page.request.post(`/api/transactions/${source}`, {
+    headers,
+    data: {
+      kind: "expense",
+      allocations: [{ category_id: "gifts", amount: "2.00" }],
+      similarPattern: "",
+    },
+  });
+  expect(invalid.status()).toBe(400);
+  expect((await detail(source)).allocations[0].category_id).toBe(
+    "subscriptions",
+  );
+  const override = await page.request.post(`/api/transactions/${source}`, {
+    headers,
+    data: {
+      kind: "expense",
+      allocations: [{ category_id: "gifts", amount: "3.00" }],
+      similarPattern: "",
+      similarIncludeManual: true,
+    },
+  });
+  expect(override.ok()).toBe(true);
+  expect((await override.json()).count).toBe(3);
+  expect((await detail(manual)).allocations).toMatchObject([
+    { category_id: "gifts", amount: 700 },
+  ]);
+  expect((await detail(peer)).allocations).toMatchObject([
+    { category_id: "gifts", amount: 450 },
+  ]);
+  expect((await detail(linked)).allocations).toEqual(before[3].allocations);
+});
