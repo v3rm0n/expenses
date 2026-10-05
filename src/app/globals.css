@@ -898,6 +898,10 @@ main {
   line-height: 1.7;
 }
 .empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
   margin-top: 7px;
 }
 .loading {
