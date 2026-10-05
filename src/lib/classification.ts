@@ -97,12 +97,25 @@ export function transactionKind(
   direction: "CRDT" | "DBIT",
   description: string,
   ownTransfer: boolean,
+  bankTransactionCode?: string | null,
 ): ExpenseKind {
   if (direction === "DBIT") {
     const capital = contributionKind(description);
     if (capital) return capital;
   }
   if (ownTransfer) return "transfer";
+  const code = bankTransactionCode?.toUpperCase();
+  // Card-funded wallet top-ups omit the sending account's IBAN. TOPUP also
+  // labels ordinary incoming bank payments, so require the card descriptor.
+  if (
+    code === "EXCHANGE" ||
+    (direction === "CRDT" &&
+      code === "TOPUP" &&
+      /\b(?:Apple Pay|Google Pay|Card)\s+Top[- ]?Up\s+by\s+\*\d{4}\s*$/i.test(
+        description,
+      ))
+  )
+    return "transfer";
   if (
     /cash withdrawal|sularaha väljav|sularahaautomaat|atm withdrawal/i.test(
       description,

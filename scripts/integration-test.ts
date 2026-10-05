@@ -276,6 +276,134 @@ try {
     },
   );
   await check(
+    "card top-ups and currency exchanges remain transfers on import, replay and reclassification",
+    async () => {
+      const before = await overview("2026-10", "EUR");
+      const topup: BankTransaction = {
+        ...bank("movement-topup", "10.00", "Bank transaction", "EUR", "CRDT"),
+        remittance_information: ["Apple Pay Top-Up by *3305"],
+        bank_transaction_code: { code: "TOPUP" },
+      };
+      const exchange: BankTransaction = {
+        ...bank(
+          "movement-exchange",
+          "20.00",
+          "Bank transaction",
+          "EUR",
+          "CRDT",
+        ),
+        remittance_information: ["Exchanged to EUR"],
+        bank_transaction_code: { code: "EXCHANGE" },
+      };
+      const payout: BankTransaction = {
+        ...bank("movement-payout", "30.00", "Reverb B.v.", "EUR", "CRDT"),
+        remittance_information: ["Reverb Payments Disbursement"],
+        bank_transaction_code: { code: "TOPUP" },
+      };
+      try {
+        await transaction((db) =>
+          importBankTransactions(account.id, [topup, exchange, payout], db),
+        );
+        assert.deepEqual(
+          (
+            await query(
+              "SELECT kind FROM transactions WHERE source_key IN ('ref:movement-topup','ref:movement-exchange') ORDER BY source_key",
+            )
+          ).map((r) => r.kind),
+          ["transfer", "transfer"],
+        );
+        // Repairing old records must use the same metadata as fresh imports.
+        await query(
+          "UPDATE transactions SET kind='income' WHERE source_key='ref:movement-topup'",
+        );
+        await transaction((db) => reclassify(db));
+        assert.equal(
+          (
+            await query(
+              "SELECT kind FROM transactions WHERE source_key='ref:movement-topup'",
+            )
+          )[0].kind,
+          "transfer",
+        );
+        assert.equal(
+          await transaction((db) =>
+            importBankTransactions(account.id, [topup, exchange, payout], db),
+          ),
+          0,
+        );
+        const after = await overview("2026-10", "EUR");
+        assert.equal(after.income, before.income + 3000);
+        assert.equal(after.spending, before.spending);
+        assert.equal(
+          (
+            await query(
+              "SELECT count(*)::int AS n FROM allocations a JOIN transactions t ON t.id=a.transaction_id WHERE t.source_key IN ('ref:movement-topup','ref:movement-exchange')",
+            )
+          )[0].n,
+          0,
+        );
+        // Preserve owner corrections even if bank metadata suggests transfer.
+        await query(
+          "UPDATE transactions SET kind='income',manual=true WHERE source_key='ref:movement-topup'",
+        );
+        await transaction((db) =>
+          importBankTransactions(account.id, [topup], db),
+        );
+        await transaction((db) => reclassify(db));
+        assert.equal(
+          (
+            await query(
+              "SELECT kind FROM transactions WHERE source_key='ref:movement-topup'",
+            )
+          )[0].kind,
+          "income",
+        );
+      } finally {
+        await query(
+          "DELETE FROM transactions WHERE source_key IN ('ref:movement-topup','ref:movement-exchange','ref:movement-payout')",
+        );
+      }
+    },
+  );
+  await check(
+    "replayed bank transactions refresh the counterparty IBAN used to detect own transfers",
+    async () => {
+      const incoming = bank("movement-iban", "40.00", "Savings", "EUR", "CRDT");
+      try {
+        await transaction((db) =>
+          importBankTransactions(account.id, [incoming], db),
+        );
+        assert.equal(
+          (
+            await query(
+              "SELECT kind FROM transactions WHERE source_key='ref:movement-iban'",
+            )
+          )[0].kind,
+          "income",
+        );
+        await transaction((db) =>
+          importBankTransactions(
+            account.id,
+            [{ ...incoming, debtor_account: { iban: "EEOWNER" } }],
+            db,
+          ),
+        );
+        assert.deepEqual(
+          (
+            await query(
+              "SELECT kind,counterparty_iban FROM transactions WHERE source_key='ref:movement-iban'",
+            )
+          )[0],
+          { kind: "transfer", counterparty_iban: "EEOWNER" },
+        );
+      } finally {
+        await query(
+          "DELETE FROM transactions WHERE source_key='ref:movement-iban'",
+        );
+      }
+    },
+  );
+  await check(
     "missing bank dates roll back the import rather than inventing dates",
     async () => {
       await assert.rejects(

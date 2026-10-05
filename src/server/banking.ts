@@ -278,6 +278,7 @@ export async function importBankTransactions(
         counterparty &&
         ownIbans.has(counterparty.replace(/\s/g, "").toUpperCase()),
       ),
+      raw.bank_transaction_code?.code,
     );
     const fingerprint = bankFingerprint(raw);
     const ordinal = (occurrences.get(fingerprint) || 0) + 1;
@@ -290,7 +291,8 @@ export async function importBankTransactions(
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
       ON CONFLICT(account_id,source_key) DO UPDATE SET amount=excluded.amount,currency=excluded.currency,
       kind=CASE WHEN transactions.manual THEN transactions.kind ELSE excluded.kind END,status=excluded.status,
-      booked_at=excluded.booked_at,value_at=excluded.value_at,merchant=excluded.merchant,description=excluded.description,raw=excluded.raw,updated_at=now()
+      booked_at=excluded.booked_at,value_at=excluded.value_at,merchant=excluded.merchant,description=excluded.description,
+      counterparty_iban=excluded.counterparty_iban,mcc=excluded.mcc,raw=excluded.raw,updated_at=now()
       RETURNING id,manual,(xmax=0) AS inserted`,
       [
         accountId,

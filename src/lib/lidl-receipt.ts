@@ -62,7 +62,7 @@ export function parseLidlReceipt(text: string): ParsedReceipt | null {
       continue;
     }
     const discount = line.match(
-      /^(?:Allahindlus\s*:?\s*|[-−]\s*)([−-]?\d+[.,]\d{2})$/i,
+      /^(?:(?:Lidl Plus\s+)?Allahindlus\s*:?\s*|[-−]\s*)([−-]?\d+[.,]\d{2})$/i,
     );
     if (discount) {
       const amount = money(discount[1]);

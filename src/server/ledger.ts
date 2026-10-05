@@ -41,6 +41,7 @@ export async function applyAllocations(
     entry.amount < 0 ? "DBIT" : "CRDT",
     `${entry.merchant} ${entry.description}`,
     Boolean(ownTransfer),
+    entry.raw?.bank_transaction_code?.code,
   );
   const ruleKind =
     rule?.category_id === "investments"

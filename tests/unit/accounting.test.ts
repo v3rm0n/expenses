@@ -96,6 +96,52 @@ describe("receipt reconciliation", () => {
   });
 });
 describe("classification", () => {
+  it.each(["Apple Pay", "Google Pay", "Card"])(
+    "recognizes %s wallet funding without an own-account IBAN",
+    (method) => {
+      expect(
+        transactionKind(
+          "CRDT",
+          `Bank transaction ${method} Top-Up by *3305`,
+          false,
+          "TOPUP",
+        ),
+      ).toBe("transfer");
+    },
+  );
+  it("keeps ordinary incoming payments, refunds and purchases separate from card top-ups", () => {
+    expect(
+      transactionKind(
+        "CRDT",
+        "Reverb Payments Disbursement · Payment from Reverb B.v.",
+        false,
+        "TOPUP",
+      ),
+    ).toBe("income");
+    expect(
+      transactionKind("CRDT", "Salary · Payment from Employer", false, "TOPUP"),
+    ).toBe("income");
+    expect(
+      transactionKind("CRDT", "Apple Pay Top-Up by *3305", false, "RCDT"),
+    ).toBe("income");
+    expect(transactionKind("CRDT", "Card refund", false, "CARD_REFUND")).toBe(
+      "refund",
+    );
+    expect(
+      transactionKind("DBIT", "Apple Pay Top-Up by *3305", false, "TOPUP"),
+    ).toBe("expense");
+    expect(
+      transactionKind("CRDT", "Apple Pay Top-Up bonus", false, "TOPUP"),
+    ).toBe("income");
+  });
+  it.each(["CRDT", "DBIT"] as const)(
+    "keeps the %s side of currency conversion out of income and spending",
+    (direction) => {
+      expect(
+        transactionKind(direction, "Exchanged to EUR", false, "EXCHANGE"),
+      ).toBe("transfer");
+    },
+  );
   it("recognises outgoing contributions while keeping salaries and ordinary bank transfers separate", () => {
     expect(transactionKind("DBIT", "Lightyear EU Client Money", false)).toBe(
       "investment",

@@ -4,6 +4,71 @@ import { woltEmailOrder } from "../../src/lib/wolt-receipt";
 import { woltOrderId, woltReceiptText, lidlReceiptText } from "../fixtures";
 
 describe("Wolt documents", () => {
+  it("subtracts an explicit payment discount from spend while keeping table discounts once", () => {
+    const text = woltReceiptText().replace(
+      "Apple Pay 6.00",
+      "Apple Pay 5.00\nDiscount 1.00",
+    );
+    const receipt = parseReceipt(text);
+    expect(receipt).toMatchObject({ valid: true, total: 500, cardAmount: 500 });
+    expect(receipt.items.map((item) => item.amount)).toEqual([
+      500, -100, 200, -100,
+    ]);
+    expect(receipt.items.at(-1)?.categoryId).toBe("restaurants");
+    expect(
+      parseReceipt(text.replace("Discount 1.00", "Discount 0.99")).valid,
+    ).toBe(false);
+    expect(
+      parseReceipt(text.replace("Discount 1.00", "Discount unreadable")).valid,
+    ).toBe(false);
+    expect(parseReceipt(text.replace("2.00 2.00", "2.00 2.01")).valid).toBe(
+      false,
+    );
+  });
+  it("reads weighed groceries, preserves wrapped package sizes, and excludes deposits from voucher allocations", () => {
+    const text = woltReceiptText()
+      .replace("Venue Test Burger Kitchen", "Venue Wolt Market Test")
+      .replace("Apple Pay 6.00", "Apple Pay 6.00\nDiscount 1.20")
+      .replace(
+        /Item VAT %[\s\S]*?Total in EUR \(incl\. VAT\) 6.00/,
+        `Item VAT % Quantity Gross unit price Price
+Chicken breast,
+24% 1 5.00 5.00
+400g
+Ramen Cheese
+24% 1 1.00 1.00
+140g
+Deposit 0% 2 0.10 0.20
+Courgette 24% 350 g 1.99/kg 0.70
+Sweet potato 24% 0.100 kg 3.00/kg 0.30
+Total in EUR (incl. VAT) 7.20`,
+      );
+    const receipt = parseReceipt(text);
+    expect(receipt).toMatchObject({ valid: true, total: 600, cardAmount: 600 });
+    expect(receipt.items.slice(0, 5).map((item) => item.description)).toEqual([
+      "Chicken breast, 400g",
+      "Ramen Cheese 140g",
+      "Deposit",
+      "Courgette",
+      "Sweet potato",
+    ]);
+    expect(receipt.items[3]).toMatchObject({
+      quantity: "350",
+      unit: "g",
+      amount: 70,
+    });
+    expect(receipt.items[4]).toMatchObject({
+      quantity: "0.100",
+      unit: "kg",
+      amount: 30,
+    });
+    expect(
+      receipt.items
+        .filter((item) => item.categoryId === "deposits")
+        .map((item) => item.amount),
+    ).toEqual([20]);
+    expect(receipt.items.reduce((sum, item) => sum + item.amount, 0)).toBe(600);
+  });
   it("parses food prices and discounts without counting preview prices or VAT", () => {
     const receipt = parseReceipt(woltReceiptText());
     expect(receipt).toMatchObject({
@@ -56,6 +121,26 @@ describe("Wolt documents", () => {
 });
 
 describe("Lidl image layout", () => {
+  it("includes Lidl Plus discounts once and still validates the discount summary", () => {
+    const text = lidlReceiptText.replace(
+      "Allahindlus: -0,24",
+      "Lidl Plus allahindlus -0,24",
+    );
+    const receipt = parseReceipt(text);
+    expect(receipt).toMatchObject({ valid: true, total: 293 });
+    expect(receipt.items[2]).toMatchObject({
+      amount: -24,
+      categoryId: receipt.items[1].categoryId,
+    });
+    expect(
+      parseReceipt(
+        text.replace(
+          "Lidl Plus allahindlus -0,24",
+          "Lidl Plus allahindlus -0,23",
+        ),
+      ).valid,
+    ).toBe(false);
+  });
   it("handles OCR that collapses the banana discount separator", () => {
     expect(
       parseReceipt(lidlReceiptText.replace("- -0,29", "--0,29")).valid,

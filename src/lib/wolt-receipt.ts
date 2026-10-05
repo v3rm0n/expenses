@@ -1,4 +1,4 @@
-import { parseMoney, validDate } from "./money";
+import { parseMoney, prorate, validDate } from "./money";
 import { productCategory } from "./classification";
 import type { ParsedReceipt, ReceiptItem } from "./types";
 
@@ -69,9 +69,15 @@ export function parseWoltReceipt(text: string): ParsedReceipt | null {
     if (!inTable || !line) continue;
     if (/^Total in\b/i.test(line)) break;
     const row = line.match(
-      /^(.*?)\s*(\d+(?:[.,]\d+)?)%\s+([−-]?\d+(?:[.,]\d+)?)\s+([−-]?\d+[.,]\d{2})\s+([−-]?\d+[.,]\d{2})$/,
+      /^(.*?)\s*(\d+(?:[.,]\d+)?)%\s+([−-]?\d+(?:[.,]\d+)?)\s*(g|kg|ml|l)?\s+([−-]?\d+[.,]\d{2})(?:\/(?:g|kg|ml|l))?\s+([−-]?\d+[.,]\d{2})$/i,
     );
     if (!row) {
+      // A wrapped package size belongs to the preceding product, even when
+      // the next product also starts on a separate line.
+      if (/^\d+(?:[.,]\d+)?\s*(?:g|kg|ml|l|tk)\b/i.test(line) && items.length) {
+        items[items.length - 1].description += ` ${line}`;
+        continue;
+      }
       // Display-only net prices and discount previews repeat table amounts.
       if (!/[−-]?\d+[.,]\d{2}\s*$/.test(line)) pending.push(line);
       continue;
@@ -82,7 +88,7 @@ export function parseWoltReceipt(text: string): ParsedReceipt | null {
       previous.description += ` ${pending.join(" ")}`;
     const description = prefix || pending.join(" ");
     pending = [];
-    const amount = money(row[5]);
+    const amount = money(row[6]);
     if (!description || amount === null) {
       issues.push("A Wolt product line could not be read.");
       continue;
@@ -91,7 +97,7 @@ export function parseWoltReceipt(text: string): ParsedReceipt | null {
     items.push({
       description,
       quantity: row[3].replace(",", "."),
-      unit: null,
+      unit: row[4]?.toLowerCase() || null,
       amount,
       categoryId:
         discount && previous
@@ -110,7 +116,7 @@ export function parseWoltReceipt(text: string): ParsedReceipt | null {
     const repeated = item.description.match(/^(.{20,}?)\s+\1$/u);
     if (repeated) item.description = repeated[1];
   }
-  const total = money(totalLine?.[2]);
+  let total = money(totalLine?.[2]);
   const paymentLines = lines.slice(
     0,
     lines.findIndex((line) => /^Item\s+VAT\b/i.test(line)),
@@ -127,6 +133,56 @@ export function parseWoltReceipt(text: string): ParsedReceipt | null {
       issues.push("The Wolt payment amount could not be read.");
     else if (/cash/i.test(payment[1])) cashAmount = (cashAmount || 0) + amount;
     else cardAmount = (cardAmount || 0) + amount;
+  }
+  // Payment-method discounts are funded by Wolt and excluded from the
+  // seller's VAT invoice total. Use the explicitly printed discount to
+  // reconcile the net spend; table discount previews are already included.
+  const paymentDiscounts = paymentLines
+    .filter((line) => /^Discount\b/i.test(line))
+    .map((line) => money(line.match(/^Discount\s+([\d.,]+)$/i)?.[1]));
+  if (paymentDiscounts.some((amount) => amount === null))
+    issues.push("The Wolt payment discount could not be read.");
+  const paymentDiscount = paymentDiscounts.reduce<number>(
+    (sum, amount) => sum + (amount || 0),
+    0,
+  );
+  if (total !== null && paymentDiscount > 0) {
+    const categories = new Map<string, number>();
+    for (const item of items)
+      if (item.categoryId !== "deposits")
+        categories.set(
+          item.categoryId,
+          (categories.get(item.categoryId) || 0) + item.amount,
+        );
+    const eligible = [...categories].filter(([, amount]) => amount > 0);
+    if (
+      paymentDiscounts.every((amount) => amount !== null) &&
+      items.reduce((sum, item) => sum + item.amount, 0) === total &&
+      (cardAmount !== null || cashAmount !== null) &&
+      (cardAmount || 0) + (cashAmount || 0) + paymentDiscount === total &&
+      paymentDiscount < total &&
+      paymentDiscount <= eligible.reduce((sum, [, amount]) => sum + amount, 0)
+    ) {
+      const shares = prorate(
+        eligible.map(([, amount]) => amount),
+        -paymentDiscount,
+      );
+      eligible.forEach(([categoryId], index) => {
+        if (shares[index])
+          items.push({
+            description: `Wolt payment discount · ${categoryId}`,
+            quantity: null,
+            unit: null,
+            amount: shares[index],
+            categoryId,
+            manual: false,
+          });
+      });
+      total -= paymentDiscount;
+    } else
+      issues.push(
+        "The Wolt payment discount does not reconcile with the invoice and payment.",
+      );
   }
   const number =
     text.match(/^(?:Wolt delivery )?Receipt\s*#\s*(\S+)/im)?.[1] || null;

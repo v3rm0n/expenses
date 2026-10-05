@@ -7,7 +7,7 @@ export function parseCoopReceipt(
   hint?: Retailer,
 ): ParsedReceipt | null {
   if (
-    !/^Toode\s+Kogus\s+Kokku\s*$/im.test(text) ||
+    !/^(?:Toode\s+Kogus\s+Kokku|Nimetus\s+Kogus\s+Summa)\s*$/im.test(text) ||
     !(
       hint === "coop" ||
       /\bcoop\b|konsum|maksimarket|tarbijate\s+[üu]histu/i.test(text)
@@ -26,21 +26,22 @@ export function parseCoopReceipt(
       return null;
     }
   };
-  const amountPattern = "([−-]?\\d+(?:[ .,]\\d{3})*[.,]\\d{2})\\s*(?:€|EUR)?";
+  const amountPattern =
+    "([−-]?\\d+(?:[ .,]\\d{3})*(?:[.,]\\d{1,2})?)\\s*(?:€|EUR)?";
   const totalPattern = new RegExp(`^Kokku\\s+${amountPattern}\\s*$`, "i");
   const summaryPattern = new RegExp(`^Summa\\s+${amountPattern}\\s*$`, "i");
   const rowPattern = new RegExp(
     `^(.+?)\\s+([−-]?\\d+(?:[.,]\\d+)?)\\s+${amountPattern}\\s*$`,
   );
   const header = lines.findIndex((line) =>
-    /^Toode\s+Kogus\s+Kokku$/i.test(line),
+    /^(?:Toode\s+Kogus\s+Kokku|Nimetus\s+Kogus\s+Summa)$/i.test(line),
   );
   const totals: number[] = [];
   let inBasket = false,
     pending: string[] = [];
   for (const line of lines) {
     if (!line) continue;
-    if (/^Toode\s+Kogus\s+Kokku$/i.test(line)) {
+    if (/^(?:Toode\s+Kogus\s+Kokku|Nimetus\s+Kogus\s+Summa)$/i.test(line)) {
       inBasket = true;
       continue;
     }
@@ -52,6 +53,8 @@ export function parseCoopReceipt(
       continue;
     }
     if (!inBasket) continue;
+    // The app export prints a standalone product barcode after each row.
+    if (/^\d{5,14}$/.test(line)) continue;
     if (/^(?:KM\s*%|Käibemaks|Makseviis|T[šs]ekk\s+nr|Kuupäev)\b/i.test(line)) {
       inBasket = false;
       issues.push(
@@ -76,7 +79,9 @@ export function parseCoopReceipt(
       quantity: row[2].replace(",", "."),
       unit: null,
       amount,
-      categoryId: productCategory(description),
+      categoryId: /^Plast\b.*(?:10\s*sent|10s)\b/i.test(description)
+        ? "deposits"
+        : productCategory(description),
       manual: false,
     });
   }
@@ -116,8 +121,11 @@ export function parseCoopReceipt(
     (cardAmount || 0) + (cashAmount || 0) !== total
   )
     issues.push("Payment amounts do not reconcile with the receipt total.");
-  const number = text.match(/T[šs]ekk\s+nr\.?\s+([\w/-]+)/i)?.[1] || null;
-  const date = text.match(/Kuup[äa]ev\s+(\d{2})[./-](\d{2})[./-](20\d{2})\b/i);
+  const number =
+    text.match(/(?:T[šs]ekk|Ost)\s+nr\.?\s*:?\s+([\w/-]+)/i)?.[1] || null;
+  const date = text.match(
+    /Kuup[äa]ev\s*:?\s+(\d{2})[./-](\d{2})[./-](20\d{2})\b/i,
+  );
   let purchasedAt: string | null = null;
   try {
     purchasedAt = validDate(date ? `${date[3]}-${date[2]}-${date[1]}` : "");
@@ -128,7 +136,7 @@ export function parseCoopReceipt(
   if (!number) issues.push("The Coop receipt number was not found.");
   const store = lines
     .slice(0, header)
-    .find((line) => /konsum|maksimarket|\bcoop\b/i.test(line));
+    .find((line) => /konsum|maksimarket|kauplus|\bcoop\b/i.test(line));
   return {
     retailer: "coop",
     merchant: store ? `Coop · ${store}` : "Coop",

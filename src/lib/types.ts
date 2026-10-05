@@ -42,6 +42,7 @@ export type BankTransaction = {
   value_date?: string;
   transaction_date?: string;
   merchant_category_code?: string;
+  bank_transaction_code?: { code?: string | null } | null;
   creditor?: { name?: string };
   debtor?: { name?: string };
   creditor_account?: { iban?: string };
