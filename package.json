@@ -27,7 +27,6 @@
     "@napi-rs/canvas": "^1.0.10",
     "dotenv": "^17.2.0",
     "html-to-text": "^9.0.5",
-    "imapflow": "^1.0.195",
     "lucide-react": "^0.468.0",
     "mailparser": "^3.7.4",
     "next": "^16.3.8",

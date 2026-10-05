@@ -119,3 +119,6 @@ CREATE TABLE IF NOT EXISTS retailer_receipts (
 
 -- Owner-selected exemptions affect receipt coverage, independently of categories.
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS receipt_not_required boolean NOT NULL DEFAULT false;
+
+-- Retire the removed mailbox connection, including its encrypted credentials.
+DELETE FROM settings WHERE key='imap';

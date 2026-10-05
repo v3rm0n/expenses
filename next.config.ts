@@ -6,7 +6,6 @@ const config: NextConfig = {
     "playwright-core",
     "pg",
     "pg-boss",
-    "imapflow",
     "mailparser",
     "pdfjs-dist",
     "@napi-rs/canvas",

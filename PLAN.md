@@ -28,7 +28,7 @@ Use the verified setup below and collect the remaining inputs before implementin
 | Banks and account types       | LHV, SEB, and Revolut; live Estonia catalogue coverage confirmed. Preserve Revolut currencies separately. Available account history requires owner consent.                                      |
 | Hosting and callback URL      | Local web app and worker on this machine, web port 4317. User handles the HTTPS reverse proxy; callback stays `https://expenses.example.com/callback`.                                              |
 | Receipt examples              | Obtain representative exports from each retailer, including discounts, weighted products, and a refund or mixed payment where available. These determine parser requirements.                    |
-| Email provider                | Free Cloudflare Email Routing + Worker/KV bridge provided, pending deployment/address configuration. Optional read-only IMAP also implemented.                                                   |
+| Email provider                | Free Cloudflare Email Routing + Worker/KV bridge provided, pending deployment/address configuration.                                                                                             |
 
 Enable Banking authenticates applications using an application ID and RSA-signed JWTs. Bank consent is separate from application authentication. Personal production use with linked accounts is supported; under the current personal-use terms, API use is free, with possible limits on linked accounts. Verify that all intended accounts are linked. [Authentication documentation](https://enablebanking.com/docs/api/reference/), [personal account activation](https://enablebanking.com/docs/api/linked-accounts), [current terms](https://enablebanking.com/terms/).
 
@@ -71,7 +71,7 @@ Implement a common receipt pipeline with a separate parser for each retailer:
 - Deduplicate both identical files and repeated exports of the same receipt. Different file formats must not create another purchase. Allow corrected documents and parser upgrades to replace derived data while retaining user corrections.
 - Match against payment amount, currency, merchant, and dates. Begin with a configurable seven-day booking window. Automatically link only a uniquely convincing match; show competing matches or amount discrepancies for review.
 - Represent split payments with multiple receipt-to-payment links. Route unsupported or ambiguous combinations to manual reconciliation rather than guessing. A receipt imported before its bank payment remains available for later matching.
-- For email, use a dedicated folder/mailbox and a provider-supported read-only API or IMAP, with OAuth authentication where available. Track message and attachment identities and process only receipt messages. Link-only emails need an authenticated retrieval path or a manual export fallback.
+- For email, use the Cloudflare Email Routing + Worker/KV bridge to deliver raw messages to the authenticated inbound endpoint. Track message and attachment identities and process only receipt messages. Link-only emails need an authenticated retrieval path or a manual export fallback.
 
 Investigate direct retailer connectors only after this pipeline works. For each retailer, check for a supported API or export feed and assess login renewal and format stability. If browser-assisted export is practical, isolate it as an optional connector. Automatic imports from every retailer remain contingent on that investigation; file import from all four is a required deliverable.
 

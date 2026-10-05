@@ -60,6 +60,54 @@ const check = (message: string, fn: () => Promise<void>) =>
 try {
   await migrate();
   await check(
+    "removing IMAP clears credentials and polling jobs while retaining inbound email",
+    async () => {
+      const { PgBoss } = await import("pg-boss");
+      const legacy = new PgBoss({ connectionString: config.databaseUrl });
+      await legacy.start();
+      let emailJob: string | null;
+      try {
+        await legacy.createQueue("imap-sync");
+        await legacy.createQueue("email-parse", { policy: "singleton" });
+        await legacy.send("imap-sync", {});
+        emailJob = await legacy.send("email-parse", { upgradeProbe: true });
+      } finally {
+        await legacy.stop();
+      }
+      const boss = await getQueue();
+      assert.equal(await boss.getQueue("imap-sync"), null);
+      assert.ok(emailJob);
+      assert.deepEqual((await boss.getJobById("email-parse", emailJob))?.data, {
+        upgradeProbe: true,
+      });
+      await boss.deleteJob("email-parse", emailJob);
+
+      const email = await receiveEmail(
+        Buffer.from(
+          "From: forwarding-noreply@google.com\r\nSubject: Gmail Forwarding Confirmation\r\nContent-Type: text/plain\r\n\r\nConfirmation code: 987654321",
+        ),
+      );
+      await query("INSERT INTO settings(key,value) VALUES('imap',$1)", [
+        JSON.stringify({ cipher: encrypt({ password: "retired-password" }) }),
+      ]);
+      await query(await readFile("migrations/001-initial.sql", "utf8"));
+      assert.equal(
+        (await query("SELECT key FROM settings WHERE key='imap'")).length,
+        0,
+      );
+      await processEmail(email.id);
+      assert.equal(
+        (
+          await query("SELECT status FROM inbound_emails WHERE id=$1", [
+            email.id,
+          ])
+        )[0].status,
+        "verification",
+      );
+      assert.match((await readEmailMessage(email.id)).text, /987654321/);
+    },
+  );
+  await check(
     "Lidl credentials and sessions stay encrypted; account changes reset authentication",
     async () => {
       const { saveLidl, lidlStatus } = await import("../src/server/lidl");

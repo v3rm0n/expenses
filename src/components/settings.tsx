@@ -580,17 +580,6 @@ type Settings = {
     lastSyncAt: string | null;
     error: string | null;
   } | null;
-  mailbox: {
-    host: string;
-    port: number;
-    secure: boolean;
-    user: string;
-    folder: string;
-    enabled: boolean;
-    hasPassword: boolean;
-    lastSyncAt?: string;
-    error?: string;
-  } | null;
 };
 export function SettingsView({ context: ctx }: { context: AppContext }) {
   const [selectedEmail, setSelectedEmail] = useState<string | null>(null);
@@ -774,13 +763,6 @@ export function SettingsView({ context: ctx }: { context: AppContext }) {
       </section>
       <section className="panel">
         <SectionTitle
-          title="Connect an existing mailbox"
-          description="Optional: use a dedicated IMAP folder on an existing or self-hosted mail server."
-        />
-        <MailboxForm context={ctx} mailbox={s.mailbox} />
-      </section>
-      <section className="panel">
-        <SectionTitle
           title="Received email"
           description="Open forwarding confirmations here to read the code or follow Gmail’s confirmation link."
         />
@@ -790,7 +772,7 @@ export function SettingsView({ context: ctx }: { context: AppContext }) {
             Add your receipt address in Gmail’s forwarding settings, then open
             the confirmation email below. Copy its code into Gmail or open the
             confirmation link, then return to Gmail to enable forwarding or
-            create a filter for receipts. For IMAP, use Check now to fetch it.
+            create a filter for receipts.
           </p>
         </div>
         {selectedEmail && (
@@ -871,8 +853,7 @@ export function SettingsView({ context: ctx }: { context: AppContext }) {
             <p className="muted">
               Messages appear here as soon as they reach the app, even if no
               receipt is recognized. If you have sent a message, check your
-              email routing rule and delivery logs, or use Check now for a
-              connected mailbox.
+              Cloudflare routing rule and Worker delivery logs.
             </p>
           </div>
         ) : (
@@ -1167,165 +1148,6 @@ function LidlForm({
         Credentials and the saved sign-in session are encrypted. Imported
         receipts use the same review and payment matching as uploads. Lidl may
         require verification when signing in again.
-      </p>
-    </form>
-  );
-}
-function MailboxForm({
-  context: ctx,
-  mailbox,
-}: {
-  context: AppContext;
-  mailbox: Settings["mailbox"];
-}) {
-  const [host, setHost] = useState(mailbox?.host || ""),
-    [port, setPort] = useState(mailbox?.port || 993),
-    [user, setUser] = useState(mailbox?.user || ""),
-    [password, setPassword] = useState(""),
-    [accessToken, setAccessToken] = useState(""),
-    [folder, setFolder] = useState(mailbox?.folder || "INBOX"),
-    [secure, setSecure] = useState(mailbox?.secure ?? true),
-    [enabled, setEnabled] = useState(mailbox?.enabled ?? true),
-    [error, setError] = useState<string | null>(null),
-    [busy, setBusy] = useState(false);
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      await api("settings/mailbox", {
-        host,
-        port,
-        user,
-        password,
-        accessToken,
-        folder,
-        secure,
-        enabled,
-      });
-      setPassword("");
-      setAccessToken("");
-      ctx.refresh();
-      ctx.notify("Mailbox configuration saved.");
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <form className="padded-form" onSubmit={save}>
-      <ErrorMessage message={error || mailbox?.error || null} />
-      <div className="form-grid three">
-        <label>
-          IMAP host
-          <input
-            value={host}
-            onChange={(e) => setHost(e.target.value)}
-            placeholder="imap.example.com"
-            required
-          />
-        </label>
-        <label>
-          Port
-          <input
-            type="number"
-            min={1}
-            max={65535}
-            value={port}
-            onChange={(e) => setPort(Number(e.target.value))}
-            required
-          />
-        </label>
-        <label>
-          Receipt folder
-          <input
-            value={folder}
-            onChange={(e) => setFolder(e.target.value)}
-            required
-          />
-        </label>
-        <label>
-          Email / username
-          <input
-            value={user}
-            onChange={(e) => setUser(e.target.value)}
-            required
-            autoComplete="off"
-          />
-        </label>
-        <label>
-          App password
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder={
-              mailbox?.hasPassword
-                ? "Leave blank to keep saved password"
-                : "Mailbox app password"
-            }
-            autoComplete="new-password"
-          />
-        </label>
-        <label>
-          OAuth access token (alternative)
-          <input
-            type="password"
-            value={accessToken}
-            onChange={(e) => setAccessToken(e.target.value)}
-            placeholder="Optional OAuth bearer token"
-            autoComplete="off"
-          />
-        </label>
-      </div>
-      <div className="button-row">
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={secure}
-            onChange={(e) => setSecure(e.target.checked)}
-          />
-          Use TLS
-        </label>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-          />
-          Check mailbox hourly
-        </label>
-      </div>
-      <div className="button-row">
-        <button className="button primary" disabled={busy}>
-          {busy ? "Saving…" : "Save mailbox"}
-        </button>
-        {mailbox && (
-          <button
-            type="button"
-            className="button secondary"
-            onClick={async () => {
-              try {
-                await api("settings/mailbox/sync", {});
-                ctx.notify("Mailbox check queued.");
-              } catch (e) {
-                setError((e as Error).message);
-              }
-            }}
-          >
-            <RefreshCw size={15} />
-            Check now
-          </button>
-        )}
-        <span className="muted small">
-          Last check: {dateTime(mailbox?.lastSyncAt)}
-        </span>
-      </div>
-      <p className="muted small">
-        Messages are read without marking them as seen or deleting them. OAuth
-        access tokens need renewal when they expire; an app password is simpler
-        for unattended polling.
       </p>
     </form>
   );

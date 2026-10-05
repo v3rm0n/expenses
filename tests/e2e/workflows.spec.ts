@@ -80,6 +80,9 @@ test("owner setup, cash ledger, receipt corrections and mobile overview", async 
   await expect(
     page.getByRole("heading", { name: "Receipt email bridge" }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Connect an existing mailbox" }),
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "Reveal bridge token" }).click();
   await expect(page.locator(".secret-field")).toHaveText(
     "expenses-test-email-token-only",
@@ -156,6 +159,17 @@ test("authentication, CSRF, email bearer token and idempotent cash imports", asy
       })
     ).status(),
   ).toBe(200);
+  const settings = await (await request.get("/api/settings")).json();
+  expect(settings).not.toHaveProperty("mailbox");
+  for (const route of ["/api/settings/mailbox", "/api/settings/mailbox/sync"])
+    expect(
+      (
+        await request.post(route, {
+          headers: { Origin: "http://127.0.0.1:4318" },
+          data: {},
+        })
+      ).status(),
+    ).toBe(404);
   const payload = {
     merchant: "Repeated request",
     amount: "1.00",

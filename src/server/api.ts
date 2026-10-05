@@ -21,7 +21,7 @@ import {
   clientIp,
 } from "./auth";
 import { AppError, publicError } from "./errors";
-import { decrypt, encrypt, equalSecret, hashPassword } from "./crypto";
+import { decrypt, equalSecret, hashPassword } from "./crypto";
 import {
   applicationState,
   overview,
@@ -45,12 +45,7 @@ import {
   storageFile,
   storeReceipt,
 } from "./receipts";
-import {
-  MAX_EMAIL_SIZE,
-  receiveEmail,
-  readEmailMessage,
-  type EmailConfig,
-} from "./email";
+import { MAX_EMAIL_SIZE, receiveEmail, readEmailMessage } from "./email";
 import {
   applyAllocations,
   autoMatchReceipt,
@@ -981,12 +976,6 @@ export async function handleApi(
       return json({ id });
     }
     if (route === "settings" && method === "GET") {
-      const [mailbox] = await query(
-        "SELECT value FROM settings WHERE key='imap'",
-      );
-      const options = mailbox?.value?.cipher
-        ? decrypt<EmailConfig>(mailbox.value.cipher)
-        : null;
       const [heartbeat] = await query(
         "SELECT value,updated_at FROM settings WHERE key='worker_heartbeat'",
       );
@@ -999,20 +988,6 @@ export async function handleApi(
         workerAt: heartbeat?.updated_at || null,
         inboundUrl: `${config.appUrl}/api/inbound/email`,
         lidl: await lidlStatus(),
-        mailbox: options
-          ? {
-              host: options.host,
-              port: options.port,
-              secure: options.secure,
-              user: options.user,
-              folder: options.folder,
-              enabled: options.enabled,
-              hasPassword: Boolean(options.password),
-              hasAccessToken: Boolean(options.accessToken),
-              lastSyncAt: mailbox.value.lastSyncAt,
-              error: mailbox.value.error,
-            }
-          : null,
       });
     }
     if (route === "settings/lidl" && method === "POST") {
@@ -1054,47 +1029,6 @@ export async function handleApi(
         environment: metadata.environment,
         services: metadata.services,
       });
-    }
-    if (route === "settings/mailbox" && method === "POST") {
-      const input = z
-        .object({
-          host: z.string().trim().min(1).max(200),
-          port: z.number().int().min(1).max(65535).default(993),
-          secure: z.boolean().default(true),
-          user: z.string().trim().min(1).max(300),
-          password: z.string().max(2000).optional(),
-          accessToken: z.string().max(10000).optional(),
-          folder: z.string().min(1).max(200).default("INBOX"),
-          enabled: z.boolean().default(true),
-        })
-        .parse(await request.json());
-      const [existing] = await query(
-        "SELECT value FROM settings WHERE key='imap'",
-      );
-      const previous = existing?.value?.cipher
-        ? decrypt<EmailConfig>(existing.value.cipher)
-        : null;
-      const options: EmailConfig = {
-        ...input,
-        password: input.password || previous?.password,
-        accessToken:
-          input.accessToken ||
-          (input.password ? undefined : previous?.accessToken),
-      };
-      if (!options.password && !options.accessToken)
-        throw new AppError(
-          "Enter an app password or an OAuth access token for the mailbox.",
-        );
-      await query(
-        "INSERT INTO settings(key,value) VALUES('imap',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now()",
-        [JSON.stringify({ cipher: encrypt(options) })],
-      );
-      if (options.enabled) await enqueue("imap-sync", {}, "imap");
-      return json({ ok: true });
-    }
-    if (route === "settings/mailbox/sync" && method === "POST") {
-      await enqueue("imap-sync", {}, "imap");
-      return json({ ok: true }, 202);
     }
     if (route === "settings/password" && method === "POST") {
       const input = z

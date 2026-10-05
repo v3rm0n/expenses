@@ -12,11 +12,12 @@ export async function getQueue() {
         console.error("A background queue connection was interrupted."),
       );
       await boss.start();
+      // Remove legacy mailbox checks when upgrading an existing installation.
+      await boss.deleteQueue("imap-sync");
       for (const name of [
         "bank-sync",
         "receipt-parse",
         "email-parse",
-        "imap-sync",
         "lidl-sync",
         "maintenance",
       ])

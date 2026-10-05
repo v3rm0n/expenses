@@ -119,11 +119,9 @@ Cloudflare Email Routing is a managed inbound service, not a mailbox you must ma
 
 Settings always shows the Received email section. A delivered email appears even if its content cannot be parsed. If no email appears there, check the Cloudflare routing rule, Worker logs, and pending `email:` keys in KV; a buffered message will be retried every 15 minutes.
 
-Alternatively, configure a dedicated existing or self-hosted IMAP mailbox in **Settings**. TLS is supported; use an app password or an OAuth access token. The app opens the folder read-only without marking messages seen or deleting them. Polling runs hourly and imports up to 100 messages per check, starting with the last 30 days on a new mailbox. OAuth tokens currently require manual renewal; provider refresh-token flows are not implemented. Credential changes reset the mailbox cursor, with document hashes retaining deduplication.
+To set up Gmail forwarding, add your receipt address in Gmail’s forwarding settings. Google sends a confirmation email to that address. Open **Settings → Received email → Open message** to read it, copy the confirmation code, or open the Gmail confirmation link. Then return to Gmail to enable forwarding or create a receipt filter. Forwarding confirmations have a separate `verification` status and do not create receipts. Previously received messages in Review can also be opened. Message bodies are displayed as plain text without loading remote images.
 
-To set up Gmail forwarding, add your receipt address in Gmail’s forwarding settings. Google sends a confirmation email to that address. Open **Settings → Received email → Open message** to read it, copy the confirmation code, or open the Gmail confirmation link. Then return to Gmail to enable forwarding or create a receipt filter. For IMAP, use **Check now** to fetch the confirmation. Forwarding confirmations have a separate `verification` status and do not create receipts. Previously received messages in Review can also be opened. Message bodies are displayed as plain text without loading remote images.
-
-Email ingestion preserves the raw message, extracts supported attachments or a readable receipt body, and queues receipt processing separately. Message viewing, raw email downloads, and retries are available in Settings. Choose the Cloudflare bridge or a dedicated IMAP mailbox for your installation.
+Email ingestion preserves the raw message, extracts supported attachments or a readable receipt body, and queues receipt processing separately. Message viewing, raw email downloads, and retries are available in Settings.
 
 ## Classification and reporting
 
@@ -169,7 +167,7 @@ npm run build
 
 Integration/browser checks create temporary databases and document directories and leave your real owner and financial data untouched. PostgreSQL must be running (`npm run db:start`), and `DATABASE_URL` in `.env.local` must use a role allowed to create temporary databases. Next.js generates `next-env.d.ts` and route types during `npm run build` or `npm run dev`; run a build before typechecking a fresh clone. Browser tests use port 4318 and a separate Next output directory. Install Chromium with `npx playwright install chromium` if needed; on this Mac the tests can reuse an existing cached Chromium, or specify `PLAYWRIGHT_EXECUTABLE_PATH`.
 
-Tests exercise exact money, currencies, discounts, receipt reconciliation, repeated imports, pending/booked transitions, refunds, own transfers, immutable manual categories, ambiguous and split matching, PDF extraction, forwarded MIME, bank pagination/failure checkpoints, consent renewal/state replay, encrypted backup/restore, owner setup, phone layout, CSRF, and email API authentication. Live bank consent, real retailer formats, deployed inbound mail, and an actual IMAP server still need validation with your accounts.
+Tests exercise exact money, currencies, discounts, receipt reconciliation, repeated imports, pending/booked transitions, refunds, own transfers, immutable manual categories, ambiguous and split matching, PDF extraction, forwarded MIME, bank pagination/failure checkpoints, consent renewal/state replay, encrypted backup/restore, owner setup, phone layout, CSRF, and email API authentication. Live bank consent, real retailer formats, and deployed inbound mail still need validation with your accounts.
 
 ## Structure
 

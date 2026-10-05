@@ -2,9 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { simpleParser } from "mailparser";
 import { convert } from "html-to-text";
-import { ImapFlow } from "imapflow";
-import { config } from "./config";
-import { digest, decrypt } from "./crypto";
+import { digest } from "./crypto";
 import { query } from "./db";
 import { AppError } from "./errors";
 import { enqueue } from "./queue";
@@ -167,113 +165,4 @@ export async function readEmailMessage(id: string) {
       skipTextToHtml: true,
     }),
   );
-}
-export type EmailConfig = {
-  host: string;
-  port: number;
-  secure: boolean;
-  user: string;
-  password?: string;
-  accessToken?: string;
-  folder: string;
-  enabled: boolean;
-  lastUid?: number;
-  uidValidity?: string;
-};
-export async function syncImap() {
-  const [setting] = await query("SELECT value FROM settings WHERE key='imap'");
-  if (!setting?.value?.cipher) return;
-  const options = decrypt<EmailConfig>(setting.value.cipher);
-  if (!options.enabled) return;
-  const [run] = await query(
-    "INSERT INTO import_runs(type) VALUES('email') RETURNING id",
-  );
-  await query(
-    "UPDATE settings SET value=jsonb_set(value,'{lastAttemptAt}',to_jsonb($1::text)) WHERE key='imap'",
-    [new Date().toISOString()],
-  );
-  const client = new ImapFlow({
-    host: options.host,
-    port: options.port,
-    secure: options.secure,
-    auth: {
-      user: options.user,
-      ...(options.accessToken
-        ? { accessToken: options.accessToken }
-        : { pass: options.password! }),
-    },
-    logger: false,
-    connectionTimeout: 15000,
-    greetingTimeout: 15000,
-    socketTimeout: 60000,
-  });
-  let count = 0;
-  try {
-    await client.connect();
-    const lock = await client.getMailboxLock(options.folder, {
-      readOnly: true,
-    });
-    try {
-      const validity = client.mailbox && String(client.mailbox.uidValidity);
-      const lastUid =
-        validity === options.uidValidity ? options.lastUid || 0 : 0;
-      const uids = await client.search(
-        lastUid
-          ? { uid: `${lastUid + 1}:*` }
-          : { since: new Date(Date.now() - 30 * 86400000) },
-        { uid: true },
-      );
-      if (uids)
-        for (const uid of uids.filter((uid) => uid > lastUid).slice(0, 100)) {
-          const message = await client.fetchOne(
-            uid,
-            { source: true },
-            { uid: true },
-          );
-          if (!message || !message.source) continue;
-          if (message.source.length > MAX_EMAIL_SIZE)
-            throw new AppError(
-              "A mailbox email exceeds the 20 MB limit. Remove it from the receipt folder or import a smaller attachment.",
-            );
-          await receiveEmail(message.source);
-          count++;
-          options.lastUid = uid;
-          options.uidValidity = validity || undefined;
-        }
-    } finally {
-      lock.release();
-    }
-    const { encrypt } = await import("./crypto");
-    await query(
-      "UPDATE settings SET value=$1,updated_at=now() WHERE key='imap'",
-      [
-        JSON.stringify({
-          cipher: encrypt(options),
-          lastSyncAt: new Date().toISOString(),
-          lastAttemptAt: new Date().toISOString(),
-          error: null,
-        }),
-      ],
-    );
-    await query(
-      "UPDATE import_runs SET status='complete',count=$2,finished_at=now() WHERE id=$1",
-      [run.id, count],
-    );
-  } catch (error) {
-    const message =
-      error instanceof AppError
-        ? error.message
-        : "Could not connect to the receipt mailbox. Check the host, folder, and app password or access token.";
-    await query(
-      "UPDATE settings SET value=jsonb_set(value,'{error}',to_jsonb($1::text)) WHERE key='imap'",
-      [message],
-    );
-    await query(
-      "UPDATE import_runs SET status='error',error=$2,finished_at=now() WHERE id=$1",
-      [run.id, message],
-    );
-    throw new AppError(message, 502);
-  } finally {
-    await client.logout().catch(() => {});
-  }
 }

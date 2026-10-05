@@ -5,7 +5,7 @@ import { getQueue, enqueue } from "../src/server/queue";
 import { syncBank } from "../src/server/banking";
 import { processReceipt } from "../src/server/receipts";
 import { syncLidl } from "../src/server/lidl";
-import { processEmail, syncImap } from "../src/server/email";
+import { processEmail } from "../src/server/email";
 assertConfig();
 await migrate();
 const boss = await getQueue();
@@ -31,7 +31,6 @@ await boss.work<{ emailId: string }>(
     for (const job of jobs) await processEmail(job.data.emailId);
   },
 );
-await boss.work("imap-sync", { localConcurrency: 1 }, async () => syncImap());
 await boss.work("lidl-sync", { localConcurrency: 1 }, async () => syncLidl());
 async function maintenance() {
   await query(
@@ -65,14 +64,6 @@ async function maintenance() {
       new Date(lidl.value.lastAttemptAt).valueOf() < Date.now() - 86400000)
   )
     await enqueue("lidl-sync", {}, "lidl");
-  const [mailbox] = await query("SELECT value FROM settings WHERE key='imap'");
-  if (
-    mailbox &&
-    decrypt<{ enabled: boolean }>(mailbox.value.cipher).enabled &&
-    (!mailbox.value.lastAttemptAt ||
-      new Date(mailbox.value.lastAttemptAt).valueOf() < Date.now() - 3600000)
-  )
-    await enqueue("imap-sync", {}, "imap");
 }
 await boss.work("maintenance", async () => maintenance());
 await boss.schedule(
@@ -83,7 +74,7 @@ await boss.schedule(
 );
 await maintenance();
 console.log(
-  "Import worker ready. Bank and Lidl imports run daily; mailbox checks run hourly.",
+  "Import worker ready. Bank and Lidl imports run daily; forwarded emails are processed as they arrive.",
 );
 let stopped = false;
 async function stop() {
