@@ -24,6 +24,41 @@ function monthDates(month: string) {
     to: new Date(Date.UTC(year, number, 0)).toISOString().slice(0, 10),
   };
 }
+function quickPeriods(now = new Date()) {
+  const [year, month] = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Europe/Tallinn",
+    year: "numeric",
+    month: "2-digit",
+  })
+    .format(now)
+    .split("-")
+    .map(Number);
+  const shiftedMonth = (offset: number) =>
+    monthDates(
+      new Date(Date.UTC(year, month - 1 + offset, 1)).toISOString().slice(0, 7),
+    );
+  const previous = shiftedMonth(-1);
+  return [
+    { label: "This month", ...shiftedMonth(0) },
+    { label: "Previous month", ...previous },
+    {
+      label: "Previous 3 months",
+      from: shiftedMonth(-3).from,
+      to: previous.to,
+    },
+    {
+      label: "Previous 6 months",
+      from: shiftedMonth(-6).from,
+      to: previous.to,
+    },
+    { label: "This year", from: `${year}-01-01`, to: `${year}-12-31` },
+    {
+      label: "Previous year",
+      from: `${year - 1}-01-01`,
+      to: `${year - 1}-12-31`,
+    },
+  ];
+}
 
 export function ReviewView({ context: ctx }: { context: AppContext }) {
   const params = useSearchParams();
@@ -166,6 +201,32 @@ export function ReviewView({ context: ctx }: { context: AppContext }) {
                 description="Choose a period and go through payments that still need a category or a receipt. Payments marked receipt not required are included only if their category still needs attention."
               />
               <form className="padded-form" onSubmit={start}>
+                <div
+                  className="button-row"
+                  role="group"
+                  aria-label="Quick periods"
+                >
+                  {quickPeriods().map((preset) => {
+                    const selected = from === preset.from && to === preset.to;
+                    return (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        className={`button ${selected ? "primary" : "secondary"} small-button`}
+                        aria-pressed={selected}
+                        onClick={() => {
+                          setFrom(preset.from);
+                          setTo(preset.to);
+                        }}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <small className="form-help">
+                  Previous month selections cover complete calendar months.
+                </small>
                 <div className="review-period">
                   <label>
                     From
