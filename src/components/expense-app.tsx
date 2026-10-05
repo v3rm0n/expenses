@@ -626,7 +626,11 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
               ? `${data.receipt_count} of ${data.receipt_required_count} payments linked`
               : "No receipts required"}
             {data.receipt_excluded_count > 0 && (
-              <div>{data.receipt_excluded_count} payments excluded</div>
+              <div>
+                {data.receipt_excluded_count}{" "}
+                {data.receipt_excluded_count === 1 ? "payment" : "payments"}{" "}
+                excluded
+              </div>
             )}
           </div>
           <div className="progress">

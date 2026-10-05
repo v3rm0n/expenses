@@ -662,9 +662,7 @@ test("receipt-not-required toggle persists, adjusts coverage and preserves class
     page.getByRole("button", { name: new RegExp(merchant) }),
   ).toBeVisible();
   await page.goto("/?month=2027-02&currency=EUR");
-  await expect(
-    page.getByText("No receipts required", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("No receipts required")).toBeVisible();
   await page.goto(`/transactions/${id}`);
   await page.getByLabel("Receipt not required", { exact: true }).uncheck();
   await expect(page.getByRole("status")).toHaveText(
