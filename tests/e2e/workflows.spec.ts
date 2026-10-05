@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Cookie } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import {
@@ -8,6 +8,7 @@ import {
   textPdf,
 } from "../fixtures";
 const password = "only-for-isolated-test-db";
+let ownerCookies: Cookie[] = [];
 test.describe.configure({ mode: "serial" });
 test("owner setup, cash ledger, receipt corrections and mobile overview", async ({
   page,
@@ -22,6 +23,7 @@ test("owner setup, cash ledger, receipt corrections and mobile overview", async 
   await expect(
     page.getByRole("heading", { name: "Overview", exact: true }),
   ).toBeVisible();
+  ownerCookies = await page.context().cookies();
   const today = new Intl.DateTimeFormat("sv-SE", {
     timeZone: "Europe/Tallinn",
   }).format(new Date());
@@ -886,10 +888,8 @@ test("guided period review saves, skips, imports receipts and resumes the curren
 test("Amazon settings import invoice packs and the saved shortcut collects every page and document", async ({
   page,
 }) => {
-  await page.goto("/login");
-  await page.getByLabel("Password", { exact: true }).fill(password);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.context().addCookies(ownerCookies);
+  await page.goto("/settings");
   await expect(
     page.getByRole("heading", { name: "Amazon.de invoices" }),
   ).toBeVisible();
@@ -1007,10 +1007,8 @@ test("Amazon settings import invoice packs and the saved shortcut collects every
 test("Amazon shortcut reports expired logins and stops on invalid invoice responses", async ({
   page,
 }) => {
-  await page.goto("/login");
-  await page.getByLabel("Password", { exact: true }).fill(password);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.context().addCookies(ownerCookies);
+  await page.goto("/settings");
   await page.getByLabel("Amazon orders from").fill("2026-10-01");
   await page.getByLabel("Amazon orders through").fill("2026-10-31");
   const shortcut = page.getByRole("link", { name: "Download Amazon invoices" });
