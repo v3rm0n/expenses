@@ -71,7 +71,11 @@ export function merchantCategory(
 }
 export function productCategory(description: string): string {
   const text = normalize(description);
-  if (/pant|taara|deposit|pfand|metallist ühekorrapakend/.test(text))
+  if (
+    /pant|taara|deposit|pfand|metallist ühekorrapakend|\b(?:metall|plast|klaas)pakend\s+[a-d]\b/.test(
+      text,
+    )
+  )
     return "deposits";
   if (
     /õlu|olu\b|beer|vein|wine|viin|vodka|siider|cider|gin\b|whisky|whiskey|tubak|sigaret/.test(

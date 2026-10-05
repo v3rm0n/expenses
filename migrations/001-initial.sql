@@ -125,3 +125,6 @@ DELETE FROM settings WHERE key='imap';
 
 -- Only complete Amazon order packs may match a combined payment automatically.
 ALTER TABLE receipts ADD COLUMN IF NOT EXISTS order_document_count integer;
+
+-- Keep owner nicknames separate from names refreshed by bank imports.
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS nickname text;

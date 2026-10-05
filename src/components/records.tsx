@@ -1,4 +1,5 @@
 "use client";
+import { ISODateInput } from "./iso-date-input";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import { randomEntryId } from "../lib/ids";
@@ -77,6 +78,41 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
     count: number;
     limit: number;
   }>(`transactions?${params}`, ctx.revision, 30000);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const selectionKey = params.toString();
+  useEffect(() => {
+    setSelected([]);
+    setBulkError(null);
+  }, [selectionKey]);
+  const visibleSelected = selected.filter((id) =>
+    data?.rows.some((row) => row.id === id),
+  );
+  const selectable =
+    data?.rows.filter((row) => ["expense", "refund"].includes(row.kind)) || [];
+  const bulkReceiptRequirement = async (value: boolean) => {
+    setBulkBusy(true);
+    setBulkError(null);
+    try {
+      const result = await api<{ count: number }>(
+        "transactions/receipt-requirement",
+        {
+          ids: visibleSelected,
+          receiptNotRequired: value,
+        },
+      );
+      setSelected([]);
+      ctx.notify(
+        `${result.count} transactions marked receipt ${value ? "not required" : "required"}.`,
+      );
+      ctx.refresh();
+    } catch (error) {
+      setBulkError((error as Error).message);
+    } finally {
+      setBulkBusy(false);
+    }
+  };
   const exportParams = new URLSearchParams(params);
   exportParams.delete("page");
   const returnTo = `/transactions?${searchParams.toString()}`;
@@ -141,7 +177,7 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
             <option value="">All accounts</option>
             {ctx.state.accounts.map((a) => (
               <option key={a.id} value={a.id}>
-                {a.name}
+                {a.nickname || a.name}
                 {a.currency ? ` · ${a.currency}` : ""}
               </option>
             ))}
@@ -202,7 +238,45 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
             onChange={(e) => setFilter("maximum", e.target.value)}
           />
         </div>
-        <ErrorMessage message={error} />
+        <ErrorMessage message={error || bulkError} />
+        {selectable.length > 0 && (
+          <div className="action-row bulk-receipt-actions">
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                aria-label="Select all payments on this page"
+                checked={selectable.every((row) =>
+                  visibleSelected.includes(row.id),
+                )}
+                disabled={bulkBusy}
+                onChange={(e) =>
+                  setSelected(
+                    e.target.checked ? selectable.map((row) => row.id) : [],
+                  )
+                }
+              />
+              {visibleSelected.length
+                ? `${visibleSelected.length} selected`
+                : "Select payments"}
+            </label>
+            <div className="button-row">
+              <button
+                className="button secondary"
+                disabled={bulkBusy || !visibleSelected.length}
+                onClick={() => void bulkReceiptRequirement(true)}
+              >
+                Mark receipt not required
+              </button>
+              <button
+                className="button secondary"
+                disabled={bulkBusy || !visibleSelected.length}
+                onClick={() => void bulkReceiptRequirement(false)}
+              >
+                Require receipts
+              </button>
+            </div>
+          </div>
+        )}
         {!data && loading ? (
           <Loading />
         ) : data?.rows.length ? (
@@ -210,6 +284,16 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
             entries={data.rows}
             navigate={ctx.navigate}
             returnTo={returnTo}
+            selection={{
+              ids: visibleSelected,
+              disabled: bulkBusy,
+              toggle: (id) =>
+                setSelected((ids) =>
+                  ids.includes(id)
+                    ? ids.filter((value) => value !== id)
+                    : [...ids, id],
+                ),
+            }}
           />
         ) : (
           <Empty
@@ -356,8 +440,7 @@ function CashModal({
             </label>
             <label>
               Date
-              <input
-                type="date"
+              <ISODateInput
                 required
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
@@ -884,6 +967,11 @@ export function TransactionDetailView({
                 Exclude this payment from receipt coverage and the missing
                 receipts list. This choice is saved immediately.
               </p>
+              <SimilarReceiptRequirements
+                entry={data}
+                context={ctx}
+                disabled={receiptBusy || busy || Boolean(review?.advancing)}
+              />
             </div>
           )}
           {data.receipts?.length ? (
@@ -1075,6 +1163,7 @@ export function ReceiptsView({ context: ctx }: { context: AppContext }) {
             <option value="rimi">Rimi</option>
             <option value="partnerkaart">Partnerkaart</option>
             <option value="coop">Coop</option>
+            <option value="maxima">Maxima</option>
             <option value="lidl">Lidl</option>
             <option value="wolt">Wolt</option>
             <option value="amazon">Amazon.de</option>
@@ -1107,6 +1196,7 @@ export function ReceiptsView({ context: ctx }: { context: AppContext }) {
               <option value="rimi">Rimi</option>
               <option value="partnerkaart">Partnerkaart</option>
               <option value="coop">Coop</option>
+              <option value="maxima">Maxima</option>
               <option value="lidl">Lidl</option>
               <option value="wolt">Wolt</option>
               <option value="amazon">Amazon.de</option>
@@ -1446,6 +1536,7 @@ export function ReceiptDetailView({
                       <option value="rimi">Rimi</option>
                       <option value="partnerkaart">Partnerkaart</option>
                       <option value="coop">Coop</option>
+                      <option value="maxima">Maxima</option>
                       <option value="lidl">Lidl</option>
                       <option value="wolt">Wolt</option>
                       <option value="amazon">Amazon.de</option>
@@ -1453,8 +1544,7 @@ export function ReceiptDetailView({
                   </label>
                   <label>
                     Purchase date
-                    <input
-                      type="date"
+                    <ISODateInput
                       value={draft.purchased_at}
                       onChange={(e) => change("purchased_at", e.target.value)}
                       required
@@ -1910,6 +2000,149 @@ export function ImportReviewView({ context: ctx }: { context: AppContext }) {
             </div>
           ))}
         </section>
+      )}
+    </div>
+  );
+}
+
+function SimilarReceiptRequirements({
+  entry,
+  context: ctx,
+  disabled,
+}: {
+  entry: Entry;
+  context: AppContext;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pattern, setPattern] = useState("");
+  const [value, setValue] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setOpen(false);
+    setPattern(suggestedDescriptionPattern(entry.description));
+    setValue(true);
+    setError(null);
+  }, [entry.id, entry.description]);
+  const preview = useData<{
+    count: number;
+    examples: Array<{
+      id: string;
+      description: string;
+      booked_at: string;
+      amount: number;
+      currency: string;
+    }>;
+  }>(
+    open
+      ? `transactions/${entry.id}/similar?${new URLSearchParams({
+          purpose: "receipt",
+          pattern,
+          receiptNotRequired: String(value),
+        })}`
+      : null,
+    ctx.revision,
+  );
+  const count =
+    (preview.data?.count || 0) + Number(entry.receipt_not_required !== value);
+  const apply = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api<{ count: number }>(
+        `transactions/${entry.id}/receipt-requirement`,
+        {
+          receiptNotRequired: value,
+          similarPattern: pattern,
+        },
+      );
+      ctx.notify(
+        `${result.count} transactions marked receipt ${value ? "not required" : "required"}.`,
+      );
+      ctx.refresh();
+    } catch (error) {
+      setError((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!entry.merchant.trim()) return null;
+  return (
+    <div className="view-stack">
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={open}
+          disabled={disabled || busy}
+          onChange={(e) => setOpen(e.target.checked)}
+        />
+        Update receipt requirement for similar transactions
+      </label>
+      {open && (
+        <>
+          <label>
+            Receipt requirement
+            <select
+              value={String(value)}
+              disabled={disabled || busy}
+              onChange={(e) => setValue(e.target.value === "true")}
+            >
+              <option value="true">Receipt not required</option>
+              <option value="false">Receipt required</option>
+            </select>
+          </label>
+          <label>
+            Receipt description contains
+            <input
+              value={pattern}
+              maxLength={200}
+              disabled={disabled || busy}
+              onChange={(e) => setPattern(e.target.value)}
+              placeholder="Leave blank for all payments to this merchant"
+            />
+          </label>
+          <p className="form-help">
+            Same merchant ({entry.merchant}), payment type and currency, across
+            all history. Receipt-linked payments are skipped. Categories,
+            amounts and notes are kept.
+          </p>
+          <ErrorMessage message={error || preview.error} />
+          {preview.loading ? (
+            <Loading />
+          ) : (
+            preview.data && (
+              <div aria-live="polite">
+                <p>
+                  {preview.data.count} other matching transactions will change.
+                </p>
+                {preview.data.examples.map((row) => (
+                  <p className="form-help" key={row.id}>
+                    {shortDate(row.booked_at)} ·{" "}
+                    {row.description || entry.merchant} ·{" "}
+                    {formatMoney(row.amount, row.currency)}
+                  </p>
+                ))}
+              </div>
+            )
+          )}
+          <button
+            className="button secondary"
+            disabled={
+              disabled ||
+              busy ||
+              preview.loading ||
+              Boolean(preview.error) ||
+              !preview.data ||
+              !count
+            }
+            onClick={() => void apply()}
+          >
+            {busy
+              ? "Updating…"
+              : `Mark ${count} transactions receipt ${value ? "not required" : "required"}`}
+          </button>
+        </>
       )}
     </div>
   );

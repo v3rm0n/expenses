@@ -167,8 +167,18 @@ export function parsePartnerkaartCsv(text: string): ParsedReceipt | null {
       /* Reviewed below. */
     }
   }
+  return finalizePartnerkaartReceipt(result, bonusAmount);
+}
+
+// CSV and PDF exports share tender reconciliation and bonus-money allocation.
+export function finalizePartnerkaartReceipt(
+  result: ParsedReceipt,
+  bonusAmount: number,
+  identityLocation = "CSV footer",
+): ParsedReceipt {
+  const { items, issues } = result;
   if (!result.number)
-    issues.push("Receipt number was not found in the CSV footer.");
+    issues.push(`Receipt number was not found in the ${identityLocation}.`);
   if (!result.purchasedAt) issues.push("Purchase date is missing or invalid.");
   if (result.total === null) issues.push("Receipt total was not found.");
   if (!items.length) issues.push("No product lines were recognized.");

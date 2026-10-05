@@ -158,23 +158,8 @@ export function TextLink({
     </button>
   );
 }
-export function shortDate(value: string | null) {
-  if (!value) return "Date not provided";
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(`${value.slice(0, 10)}T12:00:00`));
-}
-export function dateTime(value: string | null | undefined) {
-  return value
-    ? new Intl.DateTimeFormat("en-GB", {
-        dateStyle: "medium",
-        timeStyle: "short",
-        timeZone: "Europe/Tallinn",
-      }).format(new Date(value))
-    : "Not yet";
-}
+export { shortDate, dateTime } from "../lib/dates";
+import { shortDate } from "../lib/dates";
 export function initials(name: string) {
   return name
     .split(/[\s/]+/)
@@ -187,6 +172,7 @@ export type Category = { id: string; name: string; color: string };
 export type Account = {
   id: string;
   name: string;
+  nickname: string | null;
   source: string;
   bank_name?: string;
   currency: string | null;
@@ -307,10 +293,16 @@ export function EntryTable({
   entries,
   navigate,
   returnTo,
+  selection,
 }: {
   entries: Entry[];
   navigate: (path: string) => void;
   returnTo?: string;
+  selection?: {
+    ids: string[];
+    disabled: boolean;
+    toggle: (id: string) => void;
+  };
 }) {
   return (
     <div className="table-wrap entry-table">
@@ -328,29 +320,40 @@ export function EntryTable({
           {entries.map((entry) => (
             <tr key={entry.id}>
               <td>
-                <button
-                  className="merchant-link"
-                  onClick={() =>
-                    navigate(
-                      `/transactions/${entry.id}${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
-                    )
-                  }
-                >
-                  <span className="merchant-avatar">
-                    {initials(entry.merchant)}
-                  </span>
-                  <span>
-                    <strong>{entry.merchant}</strong>
-                    <small>
-                      {entry.description ||
-                        (entry.kind === "transfer"
-                          ? "Account transfer"
-                          : entry.source === "cash"
-                            ? "Cash payment"
-                            : "Bank transaction")}
-                    </small>
-                  </span>
-                </button>
+                <div className="entry-merchant">
+                  {selection && ["expense", "refund"].includes(entry.kind) && (
+                    <input
+                      type="checkbox"
+                      aria-label={`Select transaction ${entry.merchant} ${shortDate(entry.booked_at)} ${money(entry.amount, entry.currency)}`}
+                      checked={selection.ids.includes(entry.id)}
+                      disabled={selection.disabled}
+                      onChange={() => selection.toggle(entry.id)}
+                    />
+                  )}
+                  <button
+                    className="merchant-link"
+                    onClick={() =>
+                      navigate(
+                        `/transactions/${entry.id}${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
+                      )
+                    }
+                  >
+                    <span className="merchant-avatar">
+                      {initials(entry.merchant)}
+                    </span>
+                    <span>
+                      <strong>{entry.merchant}</strong>
+                      <small>
+                        {entry.description ||
+                          (entry.kind === "transfer"
+                            ? "Account transfer"
+                            : entry.source === "cash"
+                              ? "Cash payment"
+                              : "Bank transaction")}
+                      </small>
+                    </span>
+                  </button>
+                </div>
               </td>
               <td className="entry-date nowrap">
                 {shortDate(entry.booked_at)}

@@ -1,4 +1,5 @@
 "use client";
+import { ISODateInput } from "./iso-date-input";
 import { useEffect, useRef, useState } from "react";
 import { ArrowUpRight, Upload } from "lucide-react";
 import { api, ErrorMessage, SectionTitle, type AppContext } from "./ui";
@@ -75,8 +76,7 @@ export function AmazonImport({ context: ctx }: { context: AppContext }) {
         <div className="form-grid">
           <label>
             Amazon orders from
-            <input
-              type="date"
+            <ISODateInput
               value={from}
               max={to || undefined}
               required
@@ -85,8 +85,7 @@ export function AmazonImport({ context: ctx }: { context: AppContext }) {
           </label>
           <label>
             Amazon orders through
-            <input
-              type="date"
+            <ISODateInput
               value={to}
               min={from || undefined}
               required

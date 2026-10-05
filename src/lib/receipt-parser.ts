@@ -1,9 +1,11 @@
 import { parseMoney, prorate, validDate } from "./money";
 import { productCategory } from "./classification";
 import type { ParsedReceipt, Retailer, ReceiptItem } from "./types";
+import { parsePartnerkaartPdf } from "./partnerkaart-pdf";
 import { parsePartnerkaartCsv } from "./partnerkaart-csv";
 import { parseWoltReceipt } from "./wolt-receipt";
 import { parseLidlReceipt } from "./lidl-receipt";
+import { parseMaximaReceipt } from "./maxima-receipt";
 import { parseCoopReceipt } from "./coop-receipt";
 import { parseAmazonReceipt } from "./amazon-receipt";
 
@@ -39,6 +41,12 @@ const profiles: Record<
     ignore:
       /^(?:säästukaart|sääst kokku|boonus|käibemaks|km\b|vat|maksustatav|coop pluss)/i,
   },
+  maxima: {
+    merchant: "Maxima",
+    total: /^kokku\b/i,
+    ignore:
+      /^(?:KM\b|ilma KM-ta|Teenitud MAXIMA|MAXIMA raha|Allahindlus kokku)/i,
+  },
   lidl: {
     merchant: "Lidl",
     total: /^(?:kokku|tasuda|maksta|total|summe|summa)\b/i,
@@ -53,6 +61,7 @@ const profiles: Record<
 };
 function detectRetailer(text: string): Retailer {
   if (/\bwolt\b/i.test(text)) return "wolt";
+  if (/\bmaxima\b/i.test(text)) return "maxima";
   if (/\blidl\b/i.test(text)) return "lidl";
   if (/\brimi\b/i.test(text)) return "rimi";
   if (/partnerkaart|selver|delice|kaubamaja/i.test(text)) return "partnerkaart";
@@ -221,8 +230,12 @@ export function parseReceipt(text: string, hint?: Retailer): ParsedReceipt {
     .replace(/\u00a0/g, " ");
   const amazon = parseAmazonReceipt(text, hint);
   if (amazon) return amazon;
+  const maxima = parseMaximaReceipt(text, hint);
+  if (maxima) return maxima;
   const coop = parseCoopReceipt(text, hint);
   if (coop) return coop;
+  const partnerkaartPdf = parsePartnerkaartPdf(text, hint);
+  if (partnerkaartPdf) return partnerkaartPdf;
   const csv = parsePartnerkaartCsv(text);
   if (csv) return csv;
   const wolt = parseWoltReceipt(text);

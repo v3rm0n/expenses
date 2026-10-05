@@ -183,7 +183,7 @@ export async function transactionList(params: URLSearchParams, db: DB = pool) {
   const limit = Math.min(100, Math.max(1, Number(params.get("limit")) || 50)),
     page = Math.max(1, Number(params.get("page")) || 1);
   const rows = await query(
-    `SELECT t.id,t.account_id,t.amount,t.currency,t.kind,t.status,t.booked_at,t.merchant,t.description,t.manual,t.note,t.receipt_not_required,a.name AS account_name,a.source,
+    `SELECT t.id,t.account_id,t.amount,t.currency,t.kind,t.status,t.booked_at,t.merchant,t.description,t.manual,t.note,t.receipt_not_required,COALESCE(NULLIF(a.nickname,''),a.name) AS account_name,a.source,
     coalesce((SELECT jsonb_agg(jsonb_build_object('category_id',al.category_id,'name',c.name,'color',c.color,'amount',al.amount,'source',al.source)) FROM allocations al JOIN categories c ON c.id=al.category_id WHERE al.transaction_id=t.id),'[]') AS allocations,
     (SELECT count(*)::int FROM receipt_payments p WHERE p.transaction_id=t.id) AS receipt_count FROM transactions t JOIN accounts a ON a.id=t.account_id
     WHERE ${where} ORDER BY t.booked_at DESC,t.created_at DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
@@ -248,13 +248,13 @@ export async function receiptDetail(
     [id],
   );
   const links = await query(
-    `SELECT p.*,t.merchant,t.booked_at,t.currency,t.amount AS transaction_amount,t.status,t.description,a.name AS account_name,a.source FROM receipt_payments p JOIN transactions t ON t.id=p.transaction_id JOIN accounts a ON a.id=t.account_id WHERE p.receipt_id=$1`,
+    `SELECT p.*,t.merchant,t.booked_at,t.currency,t.amount AS transaction_amount,t.status,t.description,COALESCE(NULLIF(a.nickname,''),a.name) AS account_name,a.source FROM receipt_payments p JOIN transactions t ON t.id=p.transaction_id JOIN accounts a ON a.id=t.account_id WHERE p.receipt_id=$1`,
     [id],
   );
   const candidates =
     receipt.purchased_at && receipt.total
       ? await query(
-          `SELECT t.id,t.merchant,t.description,t.status,t.booked_at,t.amount,t.currency,a.name AS account_name,
+          `SELECT t.id,t.merchant,t.description,t.status,t.booked_at,t.amount,t.currency,COALESCE(NULLIF(a.nickname,''),a.name) AS account_name,
     abs(t.amount)-coalesce((SELECT sum(p.amount)::bigint FROM receipt_payments p WHERE p.transaction_id=t.id),0) AS available_amount
     FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE t.status IN ('BOOK','PDNG') AND t.currency=$1 AND t.kind=$2
     AND coalesce(t.booked_at,t.value_at,t.created_at::date) BETWEEN $3::date-1 AND $3::date+7 AND NOT EXISTS(SELECT 1 FROM receipt_payments p WHERE p.receipt_id=$4 AND p.transaction_id=t.id)

@@ -10,6 +10,7 @@ import {
   textPdf,
   scannedPdf,
   selverCsv,
+  selverPdfText,
   woltReceiptText,
   woltOrderId,
   lidlReceiptText,
@@ -61,6 +62,149 @@ const check = (message: string, fn: () => Promise<void>) =>
   });
 try {
   await migrate();
+  await check(
+    "account nicknames are used in transactions and receipt payment links and candidates",
+    async () => {
+      const { transactionList } = await import("../src/server/reporting");
+      const [account] = await query(
+        "INSERT INTO accounts(identification_hash,name,nickname,currency) VALUES('nickname-test','Bank name','Everyday spending','EUR') RETURNING id",
+      );
+      const [entry] = await query(
+        "INSERT INTO transactions(account_id,source_key,amount,currency,kind,booked_at,merchant) VALUES($1,'nickname-test',-750,'EUR','expense','2028-01-05','Nickname purchase') RETURNING id",
+        [account.id],
+      );
+      const [receipt] = await query(
+        "INSERT INTO receipts(file_hash,filename,content_type,storage_path,purchased_at,total,currency) VALUES('nickname-test','nickname.txt','text/plain','nickname-test','2028-01-05',750,'EUR') RETURNING id",
+      );
+      const filters = new URLSearchParams({
+        account: account.id,
+        from: "2028-01-01",
+        to: "2028-01-31",
+      });
+      assert.equal(
+        (await transactionList(filters)).rows[0].account_name,
+        "Everyday spending",
+      );
+      assert.equal(
+        (await receiptDetail(receipt.id)).candidates.find(
+          (c) => c.id === entry.id,
+        )?.account_name,
+        "Everyday spending",
+      );
+      await query(
+        "INSERT INTO receipt_payments(receipt_id,transaction_id,amount) VALUES($1,$2,750)",
+        [receipt.id, entry.id],
+      );
+      assert.equal(
+        (await receiptDetail(receipt.id)).links[0].account_name,
+        "Everyday spending",
+      );
+      // Bank metadata refreshes must leave the owner nickname intact.
+      await query(
+        "UPDATE accounts SET name='Refreshed bank name',provider_uid='refreshed' WHERE id=$1",
+        [account.id],
+      );
+      assert.equal(
+        (await transactionList(filters)).rows[0].account_name,
+        "Everyday spending",
+      );
+      await query("UPDATE accounts SET nickname=NULL WHERE id=$1", [
+        account.id,
+      ]);
+      assert.equal(
+        (await transactionList(filters)).rows[0].account_name,
+        "Refreshed bank name",
+      );
+      assert.equal(
+        (await receiptDetail(receipt.id)).links[0].account_name,
+        "Refreshed bank name",
+      );
+      await query("DELETE FROM receipts WHERE id=$1", [receipt.id]);
+      await query("DELETE FROM transactions WHERE id=$1", [entry.id]);
+      await query("DELETE FROM accounts WHERE id=$1", [account.id]);
+    },
+  );
+  await check(
+    "bulk receipt requirements audit each change, preserve ledger fields, and roll back missing IDs",
+    async () => {
+      const { setReceiptRequirements } =
+        await import("../src/server/receipt-requirements");
+      const [account] = await query(
+        "INSERT INTO accounts(identification_hash,name,currency,source) VALUES('bulk-receipt-test','Receipt bulk test','EUR','cash') RETURNING id",
+      );
+      const entries = await query(
+        "INSERT INTO transactions(account_id,source_key,amount,currency,kind,booked_at,merchant,manual,note) VALUES($1,'bulk-a',-300,'EUR','expense','2027-03-01','Receipt test',true,'Keep this'),($1,'bulk-b',-450,'EUR','expense','2026-01-01','Receipt test',false,'Keep that') RETURNING *",
+        [account.id],
+      );
+      const ids = entries.map((row) => row.id);
+      assert.equal(
+        await transaction((db) =>
+          setReceiptRequirements([...ids, ids[0]], true, db, { bulk: true }),
+        ),
+        2,
+      );
+      assert.equal(
+        await transaction((db) => setReceiptRequirements(ids, true, db)),
+        0,
+      );
+      const changes = await query(
+        "SELECT entity_id,change FROM corrections WHERE entity='transaction' AND entity_id=ANY($1::text[])",
+        [ids],
+      );
+      assert.equal(changes.length, 2);
+      for (const row of changes)
+        assert.deepEqual(row.change, {
+          bulk: true,
+          receiptNotRequired: true,
+          previousReceiptNotRequired: false,
+        });
+      await assert.rejects(
+        transaction((db) =>
+          setReceiptRequirements(
+            [ids[0], "00000000-0000-4000-8000-000000000000"],
+            false,
+            db,
+          ),
+        ),
+      );
+      for (const before of entries) {
+        const [after] = await query("SELECT * FROM transactions WHERE id=$1", [
+          before.id,
+        ]);
+        assert.equal(after.receipt_not_required, true);
+        const {
+          updated_at: previousUpdated,
+          receipt_not_required: previousFlag,
+          ...previousFields
+        } = before;
+        const {
+          updated_at: nextUpdated,
+          receipt_not_required: nextFlag,
+          ...nextFields
+        } = after;
+        assert.deepEqual(nextFields, previousFields);
+      }
+      assert.equal(
+        await transaction((db) => setReceiptRequirements(ids, false, db)),
+        2,
+      );
+      assert.equal(
+        (
+          await query(
+            "SELECT 1 FROM corrections WHERE entity='transaction' AND entity_id=ANY($1::text[])",
+            [ids],
+          )
+        ).length,
+        4,
+      );
+      await query(
+        "DELETE FROM corrections WHERE entity='transaction' AND entity_id=ANY($1::text[])",
+        [ids],
+      );
+      await query("DELETE FROM transactions WHERE id=ANY($1::uuid[])", [ids]);
+      await query("DELETE FROM accounts WHERE id=$1", [account.id]);
+    },
+  );
   await check(
     "removing IMAP clears credentials and polling jobs while retaining inbound email",
     async () => {
@@ -1213,6 +1357,97 @@ KUUPÄEV: 02.10.2026`;
         );
       }
       assert.equal((await storeReceipt(csv, "same-bonus.csv")).id, uploaded.id);
+    },
+  );
+  await check(
+    "Selver PDFs extract, match net payments, preserve deposits, and deduplicate CSV exports",
+    async () => {
+      const pdfText = selverPdfText
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+      const pdf = textPdf(pdfText);
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [
+            {
+              ...bank("selver-pdf", "9.36", "Selver"),
+              booking_date: "2026-09-28",
+            },
+          ],
+          db,
+        ),
+      );
+      const uploaded = await storeReceipt(pdf, "selver.pdf");
+      await processReceipt(uploaded.id);
+      const [receipt] = await query(
+        "SELECT retailer,merchant,receipt_number,purchased_at,total,card_amount,status,issues FROM receipts WHERE id=$1",
+        [uploaded.id],
+      );
+      assert.deepEqual(receipt, {
+        retailer: "partnerkaart",
+        merchant: "Selver",
+        receipt_number: "PDF-1001",
+        purchased_at: "2026-09-28",
+        total: 936,
+        card_amount: 936,
+        status: "matched",
+        issues: [],
+      });
+      const [link] = await query(
+        "SELECT p.amount,t.source_key FROM receipt_payments p JOIN transactions t ON t.id=p.transaction_id WHERE p.receipt_id=$1",
+        [uploaded.id],
+      );
+      assert.deepEqual(link, { amount: 936, source_key: "ref:selver-pdf" });
+      const products = await query(
+        "SELECT description,quantity,category_id,amount FROM receipt_items WHERE receipt_id=$1 ORDER BY position",
+        [uploaded.id],
+      );
+      assert.equal(products.length, 7);
+      assert.equal(products[1].quantity, "0.228");
+      assert.equal(
+        products.reduce((sum, row) => sum + row.amount, 0),
+        936,
+      );
+      assert.deepEqual(
+        products.slice(-2).map((row) => [row.category_id, row.amount]),
+        [
+          ["deposits", 10],
+          ["deposits", 10],
+        ],
+      );
+      await processReceipt(uploaded.id);
+      assert.deepEqual(
+        await query(
+          "SELECT description,quantity,category_id,amount FROM receipt_items WHERE receipt_id=$1 ORDER BY position",
+          [uploaded.id],
+        ),
+        products,
+      );
+      const csv = selverCsv
+        .replace("CSV-1001", "PDF-1001")
+        .replace(
+          "KOKKU;9,63",
+          "Metallpakend C;TEST-DEPOSIT;1;0,10;0,10\nMetallpakend C;TEST-DEPOSIT;1;0,10;0,10\nKOKKU;9,83",
+        )
+        .replace("PARTNERAPP;9,63", "BOONUSRAHA;0,47\nPARTNERAPP;9,36");
+      const duplicate = await storeReceipt(
+        Buffer.from(csv),
+        "selver-same-receipt.csv",
+      );
+      await processReceipt(duplicate.id);
+      const [duplicateRow] = await query(
+        "SELECT status,duplicate_of FROM receipts WHERE id=$1",
+        [duplicate.id],
+      );
+      assert.deepEqual(duplicateRow, {
+        status: "duplicate",
+        duplicate_of: uploaded.id,
+      });
+      assert.equal(
+        (await storeReceipt(pdf, "repeat-selver.pdf")).id,
+        uploaded.id,
+      );
     },
   );
   await check(
@@ -2390,6 +2625,12 @@ KUUPÄEV: 02.10.2026`;
       const originalFetch = globalThis.fetch;
       const state = "test-bank-state",
         ownerSession = "test-owner-session";
+      await query("UPDATE accounts SET nickname='Main spending' WHERE id=$1", [
+        account.id,
+      ]);
+      await query("UPDATE accounts SET nickname='Dollar savings' WHERE id=$1", [
+        usd.id,
+      ]);
       await query(
         "INSERT INTO bank_states(state_hash,session_hash,bank,valid_until,expires_at) VALUES($1,$2,$3,now()+interval '30 days',now()+interval '20 minutes')",
         [
@@ -2428,12 +2669,14 @@ KUUPÄEV: 02.10.2026`;
           ownerSession,
         );
         const wallets = await query(
-          "SELECT id,provider_uid FROM accounts WHERE identification_hash LIKE 'wallet:%' ORDER BY currency",
+          "SELECT id,provider_uid,nickname FROM accounts WHERE identification_hash LIKE 'wallet:%' ORDER BY currency",
         );
         assert.equal(wallets.length, 2);
         assert.equal(wallets[0].id, account.id);
         assert.equal(wallets[1].id, usd.id);
         assert.equal(wallets[0].provider_uid, "renewed-eur");
+        assert.equal(wallets[0].nickname, "Main spending");
+        assert.equal(wallets[1].nickname, "Dollar savings");
         await assert.rejects(
           completeBankAuthorization(state, "authorization-code", ownerSession),
         );

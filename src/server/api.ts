@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { config } from "./config";
+import { setReceiptRequirements } from "./receipt-requirements";
 import { transactionReviewQueue } from "./transaction-review";
 import { importAmazonPack, MAX_AMAZON_PACK_SIZE } from "./amazon";
 import {
@@ -171,6 +172,22 @@ export async function handleApi(
     }
     if (route === "state" && method === "GET")
       return json(await applicationState());
+    if (
+      segments[0] === "accounts" &&
+      segments.length === 2 &&
+      method === "POST"
+    ) {
+      const id = uuid(segments[1]);
+      const input = z
+        .object({ nickname: z.string().trim().max(100).nullable() })
+        .parse(await request.json());
+      const [account] = await query(
+        "UPDATE accounts SET nickname=$2 WHERE id=$1 RETURNING id,name,nickname",
+        [id, input.nickname || null],
+      );
+      if (!account) throw new AppError("Account not found.", 404);
+      return json(account);
+    }
     if (route === "overview" && method === "GET") {
       const month =
           params.get("month") ||
@@ -250,6 +267,33 @@ export async function handleApi(
       });
       return json(result, 201);
     }
+    if (route === "transactions/receipt-requirement" && method === "POST") {
+      const input = z
+        .object({
+          ids: z.array(z.uuid()).min(1).max(500),
+          receiptNotRequired: z.boolean(),
+        })
+        .strict()
+        .parse(await request.json());
+      const count = await transaction(async (db) => {
+        await db.query("SELECT pg_advisory_xact_lock(4317004)");
+        const entries = await query(
+          "SELECT kind FROM transactions WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE",
+          [input.ids],
+          db,
+        );
+        if (
+          entries.some((entry) => !["expense", "refund"].includes(entry.kind))
+        )
+          throw new AppError(
+            "Select expenses or refunds to update receipt requirements.",
+          );
+        return setReceiptRequirements(input.ids, input.receiptNotRequired, db, {
+          bulk: true,
+        });
+      });
+      return json({ ok: true, count });
+    }
     if (
       segments[0] === "transactions" &&
       segments.length === 3 &&
@@ -258,32 +302,40 @@ export async function handleApi(
     ) {
       const id = uuid(segments[1]);
       const input = z
-        .object({ receiptNotRequired: z.boolean() })
+        .object({
+          receiptNotRequired: z.boolean(),
+          similarPattern: z.string().trim().max(200).optional(),
+        })
         .strict()
         .parse(await request.json());
-      await transaction(async (db) => {
-        const [entry] = await query(
-          "SELECT receipt_not_required FROM transactions WHERE id=$1 FOR UPDATE",
+      const count = await transaction(async (db) => {
+        await db.query("SELECT pg_advisory_xact_lock(4317004)");
+        const [entry] = await query<SimilarTransaction>(
+          "SELECT * FROM transactions WHERE id=$1 FOR UPDATE",
           [id],
           db,
         );
         if (!entry) throw new AppError("Transaction not found.", 404);
-        await db.query(
-          "UPDATE transactions SET receipt_not_required=$2,updated_at=now() WHERE id=$1",
-          [id, input.receiptNotRequired],
-        );
-        await db.query(
-          "INSERT INTO corrections(entity,entity_id,change) VALUES('transaction',$1,$2)",
-          [
-            id,
-            JSON.stringify({
-              ...input,
-              previousReceiptNotRequired: entry.receipt_not_required,
-            }),
-          ],
+        const matches =
+          input.similarPattern === undefined
+            ? []
+            : await similarTransactions(
+                entry,
+                input.similarPattern,
+                db,
+                true,
+                true,
+              );
+        return setReceiptRequirements(
+          [id, ...matches.map((row) => row.id)],
+          input.receiptNotRequired,
+          db,
+          input.similarPattern === undefined
+            ? {}
+            : { similarPattern: input.similarPattern, sourceTransactionId: id },
         );
       });
-      return json({ ok: true });
+      return json({ ok: true, count });
     }
     if (
       segments[0] === "transactions" &&
@@ -301,13 +353,20 @@ export async function handleApi(
         .trim()
         .max(200)
         .parse(params.get("pattern") || "");
-      const matches = await similarTransactions(
+      const receiptPurpose = params.get("purpose") === "receipt";
+      let matches = await similarTransactions(
         entry,
         pattern,
         undefined,
         false,
-        params.get("includeManual") === "true",
+        receiptPurpose || params.get("includeManual") === "true",
       );
+      if (receiptPurpose)
+        matches = matches.filter(
+          (row) =>
+            row.receipt_not_required !==
+            (params.get("receiptNotRequired") === "true"),
+        );
       return json({
         count: matches.length,
         examples: matches
@@ -358,7 +417,7 @@ export async function handleApi(
       }
       if (method === "GET") {
         const [entry] = await query(
-          "SELECT t.*,a.name AS account_name,a.source FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE t.id=$1",
+          "SELECT t.*,COALESCE(NULLIF(a.nickname,''),a.name) AS account_name,a.source FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE t.id=$1",
           [id],
         );
         if (!entry) throw new AppError("Transaction not found.", 404);
@@ -540,6 +599,7 @@ export async function handleApi(
           "rimi",
           "partnerkaart",
           "coop",
+          "maxima",
           "lidl",
           "wolt",
           "amazon",
@@ -626,6 +686,7 @@ export async function handleApi(
               "rimi",
               "partnerkaart",
               "coop",
+              "maxima",
               "lidl",
               "wolt",
               "amazon",

@@ -1,6 +1,6 @@
 import type { NextConfig } from "next";
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
 const config: NextConfig = {
-  distDir: process.env.NEXT_DIST_DIR || ".next",
   serverExternalPackages: [
     "playwright",
     "playwright-core",
@@ -30,4 +30,12 @@ const config: NextConfig = {
     ];
   },
 };
-export default config;
+export default function nextConfig(phase: string): NextConfig {
+  return {
+    ...config,
+    // Development must not overwrite the build used by the running app.
+    distDir:
+      process.env.NEXT_DIST_DIR ||
+      (phase === PHASE_DEVELOPMENT_SERVER ? ".next-dev" : ".next"),
+  };
+}

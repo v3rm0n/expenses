@@ -29,6 +29,7 @@ import {
   initials,
   type AppContext,
   type Category,
+  type Account,
 } from "./ui";
 import { formatMoney, parseMoney } from "../lib/money";
 import type { EmailMessage } from "../lib/email-message";
@@ -44,6 +45,59 @@ type Connection = {
   last_sync_at: string | null;
   last_error: string | null;
 };
+function AccountNickname({
+  account,
+  context: ctx,
+}: {
+  account: Account;
+  context: AppContext;
+}) {
+  const [nickname, setNickname] = useState(account.nickname || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => setNickname(account.nickname || ""), [account.nickname]);
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`accounts/${account.id}`, { nickname });
+      ctx.refresh();
+      ctx.notify(
+        nickname.trim()
+          ? "Account nickname saved."
+          : "Account nickname removed.",
+      );
+    } catch (error) {
+      setError((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="account-nickname" onSubmit={save}>
+      <label>
+        Nickname
+        <input
+          value={nickname}
+          onChange={(event) => setNickname(event.target.value)}
+          placeholder={account.name}
+          maxLength={100}
+          disabled={busy}
+        />
+      </label>
+      <small className="muted">Leave blank to use the original name.</small>
+      <ErrorMessage message={error} />
+      <button
+        className="button secondary"
+        disabled={busy || nickname.trim() === (account.nickname || "")}
+      >
+        {busy ? "Saving…" : "Save nickname"}
+      </button>
+    </form>
+  );
+}
+
 export function ConnectionsView({ context: ctx }: { context: AppContext }) {
   const search = useSearchParams();
   const [country, setCountry] = useState("EE"),
@@ -200,39 +254,44 @@ export function ConnectionsView({ context: ctx }: { context: AppContext }) {
           </div>
         </section>
       )}
-      {ctx.state.accounts.some((a) => a.source === "bank") && (
+      {ctx.state.accounts.length > 0 && (
         <section className="panel">
           <SectionTitle title="Accounts" />
           <div className="account-grid">
-            {ctx.state.accounts
-              .filter((a) => a.source === "bank")
-              .map((account) => (
-                <div className="account-card" key={account.id}>
-                  <span className="account-bank">{account.bank_name}</span>
-                  <h3>{account.name}</h3>
-                  <p>
-                    {account.iban
-                      ? `•••• ${account.iban.slice(-4)}`
+            {ctx.state.accounts.map((account) => (
+              <div className="account-card" key={account.id}>
+                <span className="account-bank">
+                  {account.bank_name ||
+                    (account.source === "cash" ? "Cash" : "Bank account")}
+                </span>
+                <h3>{account.nickname || account.name}</h3>
+                {account.nickname && <p>Original name: {account.name}</p>}
+                <p>
+                  {account.iban
+                    ? `•••• ${account.iban.slice(-4)}`
+                    : account.source === "cash"
+                      ? "Cash account"
                       : "Linked bank account"}{" "}
-                    · {account.currency || "Multiple currencies"}
-                  </p>
-                  {account.balance?.balances
-                    ?.filter((b) =>
-                      ["CLBD", "CLAV", "ITBD", "ITAV"].includes(b.balance_type),
-                    )
-                    .slice(0, 2)
-                    .map((balance, i) => (
-                      <strong key={i}>
-                        {formatMoney(
-                          parseMoney(
-                            balance.balance_amount.amount,
-                            balance.balance_amount.currency,
-                          ),
+                  · {account.currency || "Multiple currencies"}
+                </p>
+                {account.balance?.balances
+                  ?.filter((b) =>
+                    ["CLBD", "CLAV", "ITBD", "ITAV"].includes(b.balance_type),
+                  )
+                  .slice(0, 2)
+                  .map((balance, i) => (
+                    <strong key={i}>
+                      {formatMoney(
+                        parseMoney(
+                          balance.balance_amount.amount,
                           balance.balance_amount.currency,
-                        )}
-                        <small>{balance.balance_type}</small>
-                      </strong>
-                    ))}
+                        ),
+                        balance.balance_amount.currency,
+                      )}
+                      <small>{balance.balance_type}</small>
+                    </strong>
+                  ))}
+                {account.source === "bank" && (
                   <small>
                     History:{" "}
                     {account.history_from
@@ -242,8 +301,10 @@ export function ConnectionsView({ context: ctx }: { context: AppContext }) {
                       ? ` – ${shortDate(account.history_to)}`
                       : ""}
                   </small>
-                </div>
-              ))}
+                )}
+                <AccountNickname account={account} context={ctx} />
+              </div>
+            ))}
           </div>
         </section>
       )}

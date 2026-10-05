@@ -115,7 +115,7 @@ export async function processEmail(id: string) {
     if (!ids.length && bodyParts.length) {
       const text = bodyParts.join("\n");
       if (
-        /rimi|selver|partnerkaart|coop|lidl|delice/i.test(text) &&
+        /rimi|selver|partnerkaart|coop|maxima|lidl|delice/i.test(text) &&
         /\b(kokku|total|tasuda|maksta|summe)\b/i.test(text)
       ) {
         const result = await storeReceipt(

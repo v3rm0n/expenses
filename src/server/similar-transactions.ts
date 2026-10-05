@@ -11,6 +11,7 @@ export type SimilarTransaction = {
   booked_at: string;
   note: string;
   manual: boolean;
+  receipt_not_required: boolean;
 };
 
 export async function similarTransactions(

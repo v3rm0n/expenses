@@ -1,4 +1,5 @@
 "use client";
+import { ISODateInput } from "./iso-date-input";
 import { useEffect, useState, type FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import { ArrowLeft, Play } from "lucide-react";
@@ -230,8 +231,7 @@ export function ReviewView({ context: ctx }: { context: AppContext }) {
                 <div className="review-period">
                   <label>
                     From
-                    <input
-                      type="date"
+                    <ISODateInput
                       value={from}
                       max={to || undefined}
                       required
@@ -240,8 +240,7 @@ export function ReviewView({ context: ctx }: { context: AppContext }) {
                   </label>
                   <label>
                     Through
-                    <input
-                      type="date"
+                    <ISODateInput
                       value={to}
                       min={from || undefined}
                       required

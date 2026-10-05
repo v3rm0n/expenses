@@ -207,3 +207,28 @@ export function scannedPdf(
     ),
   ]);
 }
+
+// Synthetic Selver PDF layout, including a discounted row, repeated items,
+// fractional quantity, deposits, and a bonus/payment split.
+export const selverPdfText = `Test Selver
+Kokku 9,83 EUR
+Kassa TEST
+Tšeki nr PDF-1001
+Kuupäev 28.09.2026 12:00:00
+Partnerkaart TEST
+Toode Kogus Ühiku hind Kokku
+Kilekott Selver 1 0,39 0,39 EUR
+Avokaado. 0,228 6,97 1,59 EUR
+Mahe raudne tatrap 1 1,95 1,95 EUR
+Mahe raudne tatrap 1 1,95 1,95 EUR
+Hambavahepuhasti 1 4,45 3,75 EUR
+--- Kampaania võit 0,70 EUR ---
+Metallpakend C 1 0,10 0,10 EUR
+Metallpakend C 1 0,10 0,10 EUR
+Sinu võit kokku: 0,70 EUR
+Kokku 9,83 EUR
+Makseviis
+Boonusmakse 0,47 EUR
+PartnerÄpp makse 9,36 EUR
+KOKKU 9,83 EUR
+Selver AS`;

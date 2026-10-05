@@ -1,4 +1,5 @@
 "use client";
+import { ISODateInput } from "./iso-date-input";
 import { useEffect, useState, type FormEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -282,8 +283,8 @@ export default function ExpenseApp() {
                       >
                         <ChevronLeft size={16} />
                       </button>
-                      <input
-                        type="month"
+                      <ISODateInput
+                        precision="month"
                         aria-label="Month"
                         value={month}
                         onChange={(e) =>
@@ -807,11 +808,7 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
                         }}
                       />
                     </div>
-                    <span>
-                      {new Intl.DateTimeFormat("en", { month: "short" }).format(
-                        new Date(`${point.month}-15`),
-                      )}
-                    </span>
+                    <span>{point.month}</span>
                   </button>
                 );
               })}

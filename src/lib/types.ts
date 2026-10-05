@@ -7,7 +7,14 @@ export type ExpenseKind =
   | "investment"
   | "pension";
 export type Retailer =
-  "rimi" | "partnerkaart" | "coop" | "lidl" | "wolt" | "amazon" | "unknown";
+  | "rimi"
+  | "partnerkaart"
+  | "coop"
+  | "maxima"
+  | "lidl"
+  | "wolt"
+  | "amazon"
+  | "unknown";
 export type Allocation = { categoryId: string; amount: number; source: string };
 export type ReceiptItem = {
   description: string;

@@ -33,6 +33,45 @@ test("owner setup, cash ledger, receipt corrections and mobile overview", async 
   ).toBeVisible();
   await page.getByRole("button", { name: "Cash entry", exact: true }).click();
   const dialog = page.getByRole("dialog");
+  const dateField = dialog.getByLabel("Date", { exact: true });
+  await expect(dateField).toHaveAttribute("type", "text");
+  await expect(dateField).toHaveValue(today);
+  await dateField.fill("2026-02-30");
+  expect(
+    await dateField.evaluate((element: HTMLInputElement) =>
+      element.checkValidity(),
+    ),
+  ).toBe(false);
+  await dateField.fill("10/05/2026");
+  expect(
+    await dateField.evaluate((element: HTMLInputElement) =>
+      element.checkValidity(),
+    ),
+  ).toBe(false);
+  await dateField.fill(today);
+  expect(
+    await dateField.evaluate((element: HTMLInputElement) =>
+      element.checkValidity(),
+    ),
+  ).toBe(true);
+  const calendar = dialog.getByLabel("Choose date", { exact: true });
+  await expect(calendar).toHaveAttribute("type", "date");
+  // Confirm clicking the calendar invokes the browser picker, then exercise
+  // the native date input's selection event and its ISO text synchronization.
+  await calendar.evaluate((element: HTMLInputElement) => {
+    const showPicker = element.showPicker.bind(element);
+    element.showPicker = () => {
+      element.dataset.opened = "true";
+      showPicker();
+    };
+  });
+  await calendar.click();
+  await expect(calendar).toHaveAttribute("data-opened", "true");
+  await page.keyboard.press("Escape");
+  await calendar.fill(`${today.slice(0, 7)}-02`);
+  await expect(dateField).toHaveValue(`${today.slice(0, 7)}-02`);
+  await calendar.fill(today);
+  await expect(dateField).toHaveValue(today);
   await dialog.getByLabel("Merchant or description").fill("Market purchase");
   await dialog.getByLabel("Amount", { exact: true }).fill("12.34");
   await dialog
@@ -43,6 +82,7 @@ test("owner setup, cash ledger, receipt corrections and mobile overview", async 
     page.getByRole("button", { name: /Market purchase/ }),
   ).toBeVisible();
   await page.getByRole("button", { name: /Market purchase/ }).click();
+  await expect(page.getByText(today, { exact: true })).toBeVisible();
   await page.getByLabel("Category 1", { exact: true }).selectOption("gifts");
   await page.getByLabel("Personal note").fill("Changed by the owner");
   await page.getByRole("button", { name: "Save changes" }).click();
@@ -418,7 +458,9 @@ test("filters survive detail navigation, CSV matches results, and mobile amounts
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("button", { name: "Overview", exact: true }).click();
   await expect(page.locator(".contributions-panel")).toHaveCount(0);
-  await page.getByLabel("Month", { exact: true }).fill("2026-08");
+  const monthCalendar = page.getByLabel("Choose month", { exact: true });
+  await expect(monthCalendar).toHaveAttribute("type", "month");
+  await monthCalendar.fill("2026-08");
   await page.reload();
   await expect(page.getByLabel("Month", { exact: true })).toHaveValue(
     "2026-08",
@@ -1057,4 +1099,231 @@ test("Amazon shortcut reports expired logins and stops on invalid invoice respon
   mode = "invalid-pdf";
   expect(await run()).toContain("missing or oversized invoice");
   await expect(page.locator("#expenses-amazon-download")).toHaveCount(0);
+});
+
+test("bulk receipt requirements update selected and similar payments without changing categories", async ({
+  page,
+}) => {
+  const headers = { Origin: "http://127.0.0.1:4318" };
+  await page.request.post("/api/auth/login", { headers, data: { password } });
+  const merchant = `Receipt bulk ${randomUUID().slice(0, 8)}`;
+  const create = async (
+    date: string,
+    description = "Monthly service",
+    currency = "EUR",
+    kind = "expense",
+  ) => {
+    const response = await page.request.post("/api/transactions", {
+      headers,
+      data: {
+        merchant,
+        date,
+        description,
+        currency,
+        kind,
+        amount: "5.10",
+        category: "subscriptions",
+        idempotencyKey: randomUUID(),
+      },
+    });
+    expect(response.status()).toBe(201);
+    return (await response.json()).id as string;
+  };
+  const source = await create("2027-03-01");
+  const peer = await create("2026-01-01");
+  const other = await create("2027-03-02", "Other service");
+  const foreign = await create("2027-03-03", "Monthly service", "USD");
+  const income = await create("2027-03-04", "Monthly service", "EUR", "income");
+  const refund = await create("2027-03-05", "Monthly service", "EUR", "refund");
+  const linked = await create("2027-03-06");
+  const upload = await page.request.post("/api/receipts/upload", {
+    headers,
+    multipart: {
+      files: {
+        name: "receipt-bulk.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from(
+          receiptText("Rimi", `receipt-bulk-${randomUUID()}`),
+        ),
+      },
+    },
+  });
+  const receiptId = (await upload.json()).results[0].id;
+  await expect
+    .poll(
+      async () =>
+        (await (await page.request.get(`/api/receipts/${receiptId}`)).json())
+          .status,
+    )
+    .toBe("ready");
+  expect(
+    (
+      await page.request.post(`/api/receipts/${receiptId}/link`, {
+        headers,
+        data: { transactionId: linked, amount: "5.10" },
+      })
+    ).ok(),
+  ).toBe(true);
+  const ids = [source, peer, other, foreign, income, refund, linked];
+  const detail = async (id: string) =>
+    (await page.request.get(`/api/transactions/${id}`)).json();
+  const before = await Promise.all(ids.map(detail));
+  await page.goto(`/transactions/${source}`);
+  await page.getByLabel("Personal note").fill("Unsaved category note");
+  await page
+    .getByLabel("Update receipt requirement for similar transactions")
+    .check();
+  await expect(
+    page.getByText("1 other matching transactions will change."),
+  ).toBeVisible();
+  await page
+    .getByRole("button", {
+      name: "Mark 2 transactions receipt not required",
+      exact: true,
+    })
+    .click();
+  await expect(page.getByRole("status")).toHaveText(
+    "2 transactions marked receipt not required.",
+  );
+  await expect(page.getByLabel("Personal note")).toHaveValue(
+    "Unsaved category note",
+  );
+  for (const [index, id] of ids.entries()) {
+    const after = await detail(id);
+    expect(after.receipt_not_required).toBe([source, peer].includes(id));
+    expect(after.allocations).toEqual(before[index].allocations);
+    expect(after.manual).toBe(before[index].manual);
+    expect(after.note).toBe(before[index].note);
+    expect(after.receipts).toEqual(before[index].receipts);
+  }
+  const invalid = await page.request.post(
+    "/api/transactions/receipt-requirement",
+    {
+      headers,
+      data: { ids: [source, randomUUID()], receiptNotRequired: false },
+    },
+  );
+  expect(invalid.status()).toBe(404);
+  expect((await detail(source)).receipt_not_required).toBe(true);
+  const invalidKind = await page.request.post(
+    "/api/transactions/receipt-requirement",
+    { headers, data: { ids: [source, income], receiptNotRequired: false } },
+  );
+  expect(invalidKind.status()).toBe(400);
+  expect((await detail(source)).receipt_not_required).toBe(true);
+  await page.goto(
+    `/transactions?history=true&currency=EUR&search=${encodeURIComponent(merchant)}`,
+  );
+  await page.getByLabel("Select all payments on this page").check();
+  // Income is never selectable; explicit selection can update receipt-linked payments.
+  await expect(page.getByText("5 selected", { exact: true })).toBeVisible();
+  await page
+    .getByRole("button", { name: "Mark receipt not required", exact: true })
+    .click();
+  await expect(page.getByRole("status")).toHaveText(
+    "3 transactions marked receipt not required.",
+  );
+  await page.getByLabel("Select all payments on this page").check();
+  await page
+    .getByRole("button", { name: "Require receipts", exact: true })
+    .click();
+  await expect(page.getByRole("status")).toHaveText(
+    "5 transactions marked receipt required.",
+  );
+  for (const id of ids)
+    expect((await detail(id)).receipt_not_required).toBe(false);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByLabel("Select all payments on this page").check();
+  await expect(page.getByText("5 selected", { exact: true })).toBeVisible();
+  const invalidValue = await page.request.post(
+    "/api/transactions/receipt-requirement",
+    { headers, data: { ids: [source], receiptNotRequired: "yes" } },
+  );
+  expect(invalidValue.status()).toBe(400);
+});
+
+test("account nicknames persist and appear in filters, lists and transaction details", async ({
+  page,
+}) => {
+  await page.context().addCookies(ownerCookies);
+  const headers = { Origin: "http://127.0.0.1:4318" };
+  const today = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Europe/Tallinn",
+  }).format(new Date());
+  const created = await page.request.post("/api/transactions", {
+    headers,
+    data: {
+      merchant: "Nickname test purchase",
+      date: today,
+      amount: "7.50",
+      currency: "CHF",
+      category: "groceries",
+      idempotencyKey: randomUUID(),
+    },
+  });
+  expect(created.ok()).toBe(true);
+  const entry = await created.json();
+  const state = await (await page.request.get("/api/state")).json();
+  const account = state.accounts.find(
+    (a: { source: string; currency: string }) =>
+      a.source === "cash" && a.currency === "CHF",
+  );
+  expect(account.nickname).toBeNull();
+  await page.goto("/connections");
+  const card = page.locator(".account-card").filter({
+    has: page.getByRole("heading", { name: account.name, exact: true }),
+  });
+  await card.getByLabel("Nickname", { exact: true }).fill("  Travel wallet  ");
+  await card.getByRole("button", { name: "Save nickname" }).click();
+  await expect(page.getByRole("status")).toHaveText("Account nickname saved.");
+  await expect(
+    page.getByRole("heading", { name: "Travel wallet", exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Travel wallet", exact: true }),
+  ).toBeVisible();
+  await page.goto(
+    `/transactions?account=${account.id}&currency=CHF&search=Nickname%20test%20purchase`,
+  );
+  await expect(
+    page.getByLabel("Filter account").locator("option:checked"),
+  ).toHaveText("Travel wallet · CHF");
+  await expect(
+    page.getByRole("cell", { name: "Travel wallet", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /Nickname test purchase/ }).click();
+  await expect(page.getByText("Travel wallet", { exact: true })).toBeVisible();
+  const detail = await (
+    await page.request.get(`/api/transactions/${entry.id}`)
+  ).json();
+  expect(detail.account_name).toBe("Travel wallet");
+  for (const nickname of ["x".repeat(101), 123]) {
+    const invalid = await page.request.post(`/api/accounts/${account.id}`, {
+      headers,
+      data: { nickname },
+    });
+    expect(invalid.status()).toBe(400);
+  }
+  const missing = await page.request.post(`/api/accounts/${randomUUID()}`, {
+    headers,
+    data: { nickname: "Missing" },
+  });
+  expect(missing.status()).toBe(404);
+  await page.goto("/connections");
+  const renamed = page.locator(".account-card").filter({
+    has: page.getByRole("heading", { name: "Travel wallet", exact: true }),
+  });
+  await renamed.getByLabel("Nickname", { exact: true }).fill("");
+  await renamed.getByRole("button", { name: "Save nickname" }).click();
+  await expect(page.getByRole("status")).toHaveText(
+    "Account nickname removed.",
+  );
+  await expect(
+    page.getByRole("heading", { name: account.name, exact: true }),
+  ).toBeVisible();
+  expect(
+    (await (await page.request.get(`/api/transactions/${entry.id}`)).json())
+      .account_name,
+  ).toBe(account.name);
 });
