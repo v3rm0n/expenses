@@ -105,15 +105,15 @@ Seed editable categories for groceries, restaurants, housing, utilities, transpo
 
 Build five primary screens:
 
-| Screen                   | What it should let the owner do                                                                                                                 |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Overview                 | See monthly spending, category breakdown, trends, largest merchants, refunds, and recurring payments; drill from every chart into its expenses. |
-| Transactions             | Search and filter by date, account, merchant, category, amount, or receipt status; inspect and correct each expense.                            |
-| Receipts                 | Upload multiple files, inspect original documents and extracted products, fix parsing, and link or unlink payments.                             |
-| Review                   | Resolve uncertain categories, ambiguous matches, failed parsing, transfer candidates, and unallocated amounts.                                  |
-| Connections and settings | Connect banks, renew consent, configure receipt email, edit categories and rules, export data, and see sync status.                             |
+| Screen                   | What it should let the owner do                                                                                             |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| Overview                 | See monthly spending, category breakdown, trends, largest merchants, and refunds; drill from every chart into its expenses. |
+| Transactions             | Search and filter by date, account, merchant, category, amount, or receipt status; inspect and correct each expense.        |
+| Receipts                 | Upload multiple files, inspect original documents and extracted products, fix parsing, and link or unlink payments.         |
+| Review                   | Resolve uncertain categories, ambiguous matches, failed parsing, transfer candidates, and unallocated amounts.              |
+| Connections and settings | Connect banks, renew consent, configure receipt email, edit categories and rules, export data, and see sync status.         |
 
-Show uncategorized spending, missing receipts, unallocated cash, and available history coverage beside the totals. Use booked dates for the default spending period and show purchase dates in receipt details. Include income and net cash flow as separate overview figures. Offer CSV exports of expenses, allocations, and receipt items. Recurring-payment detection should be a suggestion the owner can confirm.
+Show uncategorized spending, missing receipts, unallocated cash, and available history coverage beside the totals. Use booked dates for the default spending period and show purchase dates in receipt details. Include income and net cash flow as separate overview figures. Offer CSV exports of expenses, allocations, and receipt items.
 
 Protect this private application with one owner account and no public signup. Use a maintained authentication implementation, secure session cookies, request validation, and authentication checks on every data route and server mutation. Keep bank signing, session data, and receipt access in server-only modules. Authenticated financial pages and files must not enter public caches. [Next.js data security](https://nextjs.org/docs/app/guides/data-security).
 

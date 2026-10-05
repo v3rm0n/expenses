@@ -1072,32 +1072,6 @@ export async function handleApi(
       });
       return json({ ok: true });
     }
-    if (route === "recurring" && method === "POST") {
-      const input = z
-        .object({
-          merchant: z.string().max(200),
-          currency: currencyInput,
-          confirmed: z.boolean(),
-        })
-        .parse(await request.json());
-      await transaction(async (db) => {
-        await db.query("SELECT pg_advisory_xact_lock(4317003)");
-        const [row] = await query(
-          "SELECT value FROM settings WHERE key='recurring'",
-          [],
-          db,
-        );
-        const items = new Set<string>(row?.value || []),
-          key = `${input.currency}:${input.merchant}`;
-        if (input.confirmed) items.add(key);
-        else items.delete(key);
-        await db.query(
-          "INSERT INTO settings(key,value) VALUES('recurring',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-          [JSON.stringify([...items])],
-        );
-      });
-      return json({ ok: true });
-    }
     if (route === "emails" && method === "GET")
       return json(
         await query(

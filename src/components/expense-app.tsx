@@ -488,13 +488,6 @@ type Summary = {
   recent: Entry[];
   pending: { count: number; amount: number };
   cash: { amount: number };
-  recurring: Array<{
-    merchant: string;
-    currency: string;
-    amount: number;
-    months: number;
-    confirmed: boolean;
-  }>;
 };
 function OverviewView({ context: ctx }: { context: AppContext }) {
   const { data, error, loading } = useData<Summary>(
@@ -952,35 +945,6 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
           </Empty>
         )}
       </section>
-      {data.recurring.length > 0 && (
-        <section className="panel">
-          <SectionTitle
-            title="Recurring payments"
-            description="Similar payments in at least three months. Confirm the ones that recur."
-          />
-          <div className="recurring-grid">
-            {data.recurring.map((item) => (
-              <div className="recurring-card" key={item.merchant}>
-                <strong>{item.merchant}</strong>
-                <span>{fmt(item.amount)} / payment</span>
-                <button
-                  className="text-link"
-                  onClick={async () => {
-                    await api("recurring", {
-                      merchant: item.merchant,
-                      currency: ctx.currency,
-                      confirmed: !item.confirmed,
-                    });
-                    ctx.refresh();
-                  }}
-                >
-                  {item.confirmed ? "Confirmed · Undo" : "Confirm recurring"}
-                </button>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
     </div>
   );
 }
