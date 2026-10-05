@@ -2144,6 +2144,102 @@ KUUPÄEV: 02.10.2026`;
     },
   );
   await check(
+    "period review includes all unresolved payments, including partial receipts, beyond 100 rows",
+    async () => {
+      const { transactionReviewQueue } =
+        await import("../src/server/transaction-review");
+      const entries = await query(
+        "INSERT INTO transactions(account_id,source_key,amount,currency,kind,booked_at,merchant) SELECT $1,'period-review-'||n,-510,'EUR','expense','2028-01-15','Review queue' FROM generate_series(1,110) n RETURNING id",
+        [account.id],
+      );
+      const ids = entries.map((entry) => entry.id);
+      await query(
+        "INSERT INTO allocations(transaction_id,category_id,amount,source) SELECT unnest($1::uuid[]),'uncategorized',510,'merchant'",
+        [ids],
+      );
+      await query(
+        "UPDATE allocations SET category_id='groceries' WHERE transaction_id=ANY($1::uuid[])",
+        [[ids[0], ids[2], ids[6], ids[8]]],
+      );
+      await query(
+        "UPDATE transactions SET receipt_not_required=true WHERE id=ANY($1::uuid[])",
+        [[ids[0], ids[1]]],
+      );
+      await query("DELETE FROM allocations WHERE transaction_id=$1", [ids[1]]);
+      await query(
+        "UPDATE transactions SET booked_at='2028-01-01' WHERE id=$1",
+        [ids[1]],
+      );
+      await query(
+        "UPDATE transactions SET booked_at='2028-01-31' WHERE id=$1",
+        [ids[2]],
+      );
+      await query("UPDATE transactions SET kind='transfer' WHERE id=$1", [
+        ids[3],
+      ]);
+      await query("UPDATE transactions SET status='PDNG' WHERE id=$1", [
+        ids[4],
+      ]);
+      await query("UPDATE transactions SET currency='USD' WHERE id=$1", [
+        ids[5],
+      ]);
+      await query(
+        "UPDATE transactions SET booked_at='2027-12-31' WHERE id=$1",
+        [ids[7]],
+      );
+      const receipt = await storeReceipt(
+        Buffer.from(receiptText("Rimi", "PERIOD-REVIEW-FULL", "15.01.2028")),
+        "period-full.txt",
+      );
+      await processReceipt(receipt.id);
+      await transaction((db) =>
+        linkReceipt(receipt.id, ids[6], 510, false, db),
+      );
+      const partial = await storeReceipt(
+        Buffer.from(receiptText("Rimi", "PERIOD-REVIEW-PARTIAL", "15.01.2028")),
+        "period-partial.txt",
+      );
+      await processReceipt(partial.id);
+      await query("UPDATE transactions SET manual=true WHERE id=$1", [ids[8]]);
+      await transaction((db) =>
+        linkReceipt(partial.id, ids[8], 100, false, db),
+      );
+      const params = new URLSearchParams({
+        from: "2028-01-01",
+        to: "2028-01-31",
+        currency: "EUR",
+      });
+      const queue = await transactionReviewQueue(params);
+      assert.equal(queue.ids.length, 104);
+      assert.equal(queue.ids[0], ids[1]);
+      assert.ok(queue.ids.includes(ids[2]));
+      assert.ok(queue.ids.includes(ids[8]));
+      for (const id of [ids[0], ids[3], ids[4], ids[5], ids[6], ids[7]])
+        assert.ok(!queue.ids.includes(id));
+      params.delete("currency");
+      assert.equal((await transactionReviewQueue(params)).ids.length, 105);
+      await assert.rejects(
+        () =>
+          transactionReviewQueue(
+            new URLSearchParams({ from: "2028-02-01", to: "2028-01-01" }),
+          ),
+        /start date/,
+      );
+      await assert.rejects(
+        () =>
+          transactionReviewQueue(
+            new URLSearchParams({ from: "2028-99-01", to: "2028-01-31" }),
+          ),
+        /valid start and end/,
+      );
+      // A linked receipt that later needs validation returns to the queue.
+      await query("UPDATE receipts SET status='review' WHERE id=$1", [
+        receipt.id,
+      ]);
+      assert.ok((await transactionReviewQueue(params)).ids.includes(ids[6]));
+    },
+  );
+  await check(
     "receipt pagination reaches older imports and filters the full collection",
     async () => {
       await query(`INSERT INTO receipts(file_hash,filename,content_type,storage_path,retailer,merchant,status,created_at)

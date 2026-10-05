@@ -400,13 +400,19 @@ function CashModal({
 export function TransactionDetailView({
   context: ctx,
   id,
+  review,
 }: {
   context: AppContext;
   id: string;
+  review?: {
+    returnTo: string;
+    advancing: boolean;
+    onNext: () => Promise<void>;
+  };
 }) {
   const searchParams = useSearchParams();
   const requestedReturn = searchParams.get("returnTo") || "";
-  const returnTo = /^\/transactions(?:\?|$)/.test(requestedReturn)
+  const returnTo = /^\/(?:transactions|review)(?:\?|$)/.test(requestedReturn)
     ? requestedReturn
     : "/transactions";
   const { data, error, loading } = useData<Entry>(
@@ -418,6 +424,7 @@ export function TransactionDetailView({
     [similarPattern, setSimilarPattern] = useState("");
   const [receiptNotRequired, setReceiptNotRequired] = useState(false),
     [receiptBusy, setReceiptBusy] = useState(false);
+  const loadedClassification = useRef<string | null>(null);
   const [kind, setKind] = useState("expense"),
     [note, setNote] = useState(""),
     [automatic, setAutomatic] = useState(false),
@@ -449,11 +456,21 @@ export function TransactionDetailView({
   );
   useEffect(() => {
     if (data) {
+      setReceiptNotRequired(data.receipt_not_required);
+      const signature = JSON.stringify([
+        data.id,
+        data.kind,
+        data.note,
+        data.allocations,
+      ]);
+      // A receipt action refreshes this record too. Keep unsaved category edits
+      // when only receipt links or the receipt requirement have changed.
+      if (loadedClassification.current === signature) return;
+      loadedClassification.current = signature;
       setApplySimilar(false);
       setIncludeManual(false);
       setSimilarPattern(suggestedDescriptionPattern(data.description));
       setKind(data.kind);
-      setReceiptNotRequired(data.receipt_not_required);
       setNote(data.note);
       setAutomatic(false);
       setRows(
@@ -478,6 +495,13 @@ export function TransactionDetailView({
         {loading && <Loading />}
       </>
     );
+  const receiptComplete =
+    Boolean(data.receipts?.length) &&
+    data.receipts!.reduce((sum, receipt) => sum + receipt.linked_amount, 0) >=
+      Math.abs(data.amount) &&
+    data.receipts!.every((receipt) =>
+      ["ready", "matched"].includes(receipt.status),
+    );
   const save = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
@@ -498,6 +522,7 @@ export function TransactionDetailView({
           : "Transaction updated.",
       );
       ctx.refresh();
+      if (review) await review.onNext();
     } catch (e) {
       setSaveError((e as Error).message);
     } finally {
@@ -533,17 +558,20 @@ export function TransactionDetailView({
       await api(`transactions/${id}`, undefined, "DELETE");
       ctx.refresh();
       ctx.notify("Cash entry deleted.");
-      ctx.navigate(returnTo);
+      if (review) await review.onNext();
+      else ctx.navigate(returnTo);
     } catch (e) {
       setSaveError((e as Error).message);
     }
   };
   return (
     <div className="view-stack">
-      <TextLink onClick={() => ctx.navigate(returnTo)}>
-        <ArrowLeft size={15} />
-        All transactions
-      </TextLink>
+      {!review && (
+        <TextLink onClick={() => ctx.navigate(returnTo)}>
+          <ArrowLeft size={15} />
+          All transactions
+        </TextLink>
+      )}
       <ErrorMessage message={error || saveError} />
       <div className="detail-grid">
         <section className="panel">
@@ -575,6 +603,40 @@ export function TransactionDetailView({
               </Badge>
             </div>
           </div>
+          {review && (
+            <div className="review-checks">
+              <Badge
+                variant={
+                  !data.allocations.length ||
+                  data.allocations.some(
+                    (a) => a.category_id === "uncategorized" && a.amount !== 0,
+                  )
+                    ? "warning"
+                    : "success"
+                }
+              >
+                {!data.allocations.length ||
+                data.allocations.some(
+                  (a) => a.category_id === "uncategorized" && a.amount !== 0,
+                )
+                  ? "Needs category"
+                  : "Category set"}
+              </Badge>
+              <Badge
+                variant={
+                  receiptNotRequired || receiptComplete ? "success" : "warning"
+                }
+              >
+                {receiptNotRequired
+                  ? "Receipt not required"
+                  : receiptComplete
+                    ? "Receipt linked"
+                    : data.receipts?.length
+                      ? "Receipt incomplete"
+                      : "Receipt missing"}
+              </Badge>
+            </div>
+          )}
           <form onSubmit={save} className="padded-form">
             <SectionTitle
               title="Classification"
@@ -763,6 +825,8 @@ export function TransactionDetailView({
                 className="button primary"
                 disabled={
                   busy ||
+                  receiptBusy ||
+                  review?.advancing ||
                   (applySimilar &&
                     canApplySimilar &&
                     (similar.loading ||
@@ -772,10 +836,22 @@ export function TransactionDetailView({
               >
                 {busy
                   ? "Saving…"
-                  : applySimilar && canApplySimilar
-                    ? `Save and categorize ${1 + (similar.data?.count || 0)} transactions`
-                    : "Save changes"}
+                  : review
+                    ? "Save and next"
+                    : applySimilar && canApplySimilar
+                      ? `Save and categorize ${1 + (similar.data?.count || 0)} transactions`
+                      : "Save changes"}
               </button>
+              {review && (
+                <button
+                  type="button"
+                  className="button secondary"
+                  disabled={busy || receiptBusy || review.advancing}
+                  onClick={() => void review.onNext().catch(() => {})}
+                >
+                  Skip for now
+                </button>
+              )}
               {data.source === "cash" && (
                 <button
                   type="button"
@@ -797,7 +873,7 @@ export function TransactionDetailView({
                 <input
                   type="checkbox"
                   checked={receiptNotRequired}
-                  disabled={receiptBusy}
+                  disabled={receiptBusy || busy || review?.advancing}
                   onChange={(e) =>
                     void updateReceiptRequirement(e.target.checked)
                   }
@@ -815,7 +891,11 @@ export function TransactionDetailView({
               {data.receipts.map((receipt) => (
                 <button
                   key={receipt.id}
-                  onClick={() => ctx.navigate(`/receipts/${receipt.id}`)}
+                  onClick={() =>
+                    ctx.navigate(
+                      `/receipts/${receipt.id}${review ? `?returnTo=${encodeURIComponent(review.returnTo)}&transaction=${encodeURIComponent(id)}` : ""}`,
+                    )
+                  }
                 >
                   <ReceiptText size={21} />
                   <div>
@@ -841,13 +921,37 @@ export function TransactionDetailView({
             >
               <button
                 className="button secondary"
-                onClick={() => ctx.navigate("/receipts")}
+                onClick={() =>
+                  ctx.navigate(
+                    review
+                      ? `/receipts?returnTo=${encodeURIComponent(review.returnTo)}&transaction=${id}`
+                      : "/receipts",
+                  )
+                }
               >
                 <Upload size={16} />
                 Import receipt
               </button>
             </Empty>
           )}
+          {review &&
+          data.receipts?.length &&
+          !receiptComplete &&
+          !receiptNotRequired ? (
+            <div className="padded-form">
+              <button
+                className="button secondary"
+                onClick={() =>
+                  ctx.navigate(
+                    `/receipts?returnTo=${encodeURIComponent(review.returnTo)}&transaction=${encodeURIComponent(id)}`,
+                  )
+                }
+              >
+                <Upload size={16} />
+                Import or link another receipt
+              </button>
+            </div>
+          ) : null}
           {data.source === "bank" && (
             <details className="source-details">
               <summary>Original bank data</summary>
@@ -861,6 +965,10 @@ export function TransactionDetailView({
 }
 export function ReceiptsView({ context: ctx }: { context: AppContext }) {
   const searchParams = useSearchParams();
+  const requestedReturn = searchParams.get("returnTo") || "";
+  const reviewReturn = /^\/review(?:\?|$)/.test(requestedReturn)
+    ? requestedReturn
+    : null;
   const filter = searchParams.get("retailer") || "",
     page = Math.max(1, Math.floor(Number(searchParams.get("page")) || 1));
   const params = new URLSearchParams({
@@ -913,6 +1021,12 @@ export function ReceiptsView({ context: ctx }: { context: AppContext }) {
   const receipts = data?.rows || [];
   return (
     <div className="view-stack">
+      {reviewReturn && (
+        <TextLink onClick={() => ctx.navigate(reviewReturn)}>
+          <ArrowLeft size={15} />
+          Back to review
+        </TextLink>
+      )}
       <section
         className="upload-panel"
         onDragOver={(e) => e.preventDefault()}
@@ -1001,7 +1115,12 @@ export function ReceiptsView({ context: ctx }: { context: AppContext }) {
           <ReceiptTable
             receipts={receipts}
             context={ctx}
-            returnTo={`/receipts?${searchParams}`}
+            returnTo={reviewReturn || `/receipts?${searchParams}`}
+            transactionId={
+              reviewReturn
+                ? searchParams.get("transaction") || undefined
+                : undefined
+            }
           />
         ) : (
           <Empty
@@ -1052,10 +1171,12 @@ function ReceiptTable({
   receipts,
   context: ctx,
   returnTo,
+  transactionId,
 }: {
   receipts: Receipt[];
   context: AppContext;
   returnTo?: string;
+  transactionId?: string;
 }) {
   return (
     <div className="table-wrap">
@@ -1077,7 +1198,7 @@ function ReceiptTable({
                   className="merchant-link"
                   onClick={() =>
                     ctx.navigate(
-                      `/receipts/${receipt.id}${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
+                      `/receipts/${receipt.id}${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}${transactionId ? `&transaction=${transactionId}` : ""}` : ""}`,
                     )
                   }
                 >
@@ -1163,11 +1284,11 @@ export function ReceiptDetailView({
 }) {
   const searchParams = useSearchParams();
   const requestedReturn = searchParams.get("returnTo") || "";
-  const returnTo = /^\/receipts(?:\?|$)/.test(requestedReturn)
+  const returnTo = /^\/(?:receipts|review)(?:\?|$)/.test(requestedReturn)
     ? requestedReturn
     : "/receipts";
   const { data, error, loading } = useData<ReceiptDetail>(
-    `receipts/${id}`,
+    `receipts/${id}${searchParams.get("transaction") ? `?transaction=${encodeURIComponent(searchParams.get("transaction")!)}` : ""}`,
     ctx.revision,
     5000,
   );
@@ -1177,6 +1298,26 @@ export function ReceiptDetailView({
     [busy, setBusy] = useState(false),
     [candidate, setCandidate] = useState(""),
     [linkAmount, setLinkAmount] = useState("");
+  const selectedHint = useRef(false);
+  useEffect(() => {
+    if (!data || selectedHint.current) return;
+    const target = data.candidates.find(
+      (c) => c.id === searchParams.get("transaction"),
+    );
+    if (target) {
+      const remaining =
+        Math.abs(data.total || 0) -
+        data.links.reduce((sum, link) => sum + link.amount, 0);
+      setCandidate(target.id);
+      setLinkAmount(
+        decimalMoney(
+          Math.min(remaining, target.available_amount),
+          data.currency,
+        ),
+      );
+      selectedHint.current = true;
+    }
+  }, [data, searchParams]);
   useEffect(() => {
     if (data && !editing)
       setDraft({
@@ -1248,7 +1389,7 @@ export function ReceiptDetailView({
     <div className="view-stack">
       <TextLink onClick={() => ctx.navigate(returnTo)}>
         <ArrowLeft size={15} />
-        All receipts
+        {returnTo.startsWith("/review") ? "Back to review" : "All receipts"}
       </TextLink>
       <ErrorMessage message={error || saveError || data.error} />
       {data.issues.length > 0 && (
@@ -1707,7 +1848,7 @@ export function ReceiptDetailView({
     </div>
   );
 }
-export function ReviewView({ context: ctx }: { context: AppContext }) {
+export function ImportReviewView({ context: ctx }: { context: AppContext }) {
   const { data, error, loading } = useData<{
     transactions: Entry[];
     receipts: Receipt[];
@@ -1728,23 +1869,12 @@ export function ReviewView({ context: ctx }: { context: AppContext }) {
   return (
     <div className="view-stack">
       <ErrorMessage message={error} />
-      {!data.transactions.length &&
-        !data.receipts.length &&
-        !data.emails.length && (
-          <section className="panel">
-            <Empty
-              title="Nothing to review"
-              text="Uncategorized transactions, unlinked receipts, and failed imports appear here."
-            />
-          </section>
-        )}
-      {data.transactions.length > 0 && (
+      {!data.receipts.length && !data.emails.length && (
         <section className="panel">
-          <SectionTitle
-            title="Expenses to categorize"
-            description="These payments are included in your totals, with an uncategorized amount."
+          <Empty
+            title="Nothing to review"
+            text="Unlinked receipts and failed email imports appear here."
           />
-          <EntryTable entries={data.transactions} navigate={ctx.navigate} />
         </section>
       )}
       {data.receipts.length > 0 && (

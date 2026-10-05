@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { config } from "./config";
+import { transactionReviewQueue } from "./transaction-review";
 import {
   similarTransactions,
   type SimilarTransaction,
@@ -370,7 +371,7 @@ export async function handleApi(
           [id],
         );
         const receipts = await query(
-          "SELECT r.id,r.filename,r.merchant,r.total,r.currency,p.amount AS linked_amount FROM receipts r JOIN receipt_payments p ON p.receipt_id=r.id WHERE p.transaction_id=$1",
+          "SELECT r.id,r.filename,r.merchant,r.total,r.currency,r.status,p.amount AS linked_amount FROM receipts r JOIN receipt_payments p ON p.receipt_id=r.id WHERE p.transaction_id=$1",
           [id],
         );
         return json({ ...entry, allocations, receipts });
@@ -562,7 +563,13 @@ export async function handleApi(
     if (segments[0] === "receipts" && segments.length >= 2) {
       const id = uuid(segments[1]),
         action = segments[2];
-      if (!action && method === "GET") return json(await receiptDetail(id));
+      if (!action && method === "GET")
+        return json(
+          await receiptDetail(
+            id,
+            params.get("transaction") ? uuid(params.get("transaction")!) : null,
+          ),
+        );
       if (action === "file" && method === "GET") {
         const [receipt] = await query("SELECT * FROM receipts WHERE id=$1", [
           id,
@@ -768,6 +775,8 @@ export async function handleApi(
         return json({ ok: true });
       }
     }
+    if (route === "review/transactions" && method === "GET")
+      return json(await transactionReviewQueue(params));
     if (route === "review" && method === "GET")
       return json({
         transactions: (

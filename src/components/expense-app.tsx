@@ -43,8 +43,8 @@ import {
   TransactionDetailView,
   ReceiptsView,
   ReceiptDetailView,
-  ReviewView,
 } from "./records";
+import { ReviewView } from "./review";
 import { ConnectionsView, RulesView, SettingsView } from "./settings";
 
 const currentMonth = () =>

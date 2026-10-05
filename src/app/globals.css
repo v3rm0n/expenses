@@ -1164,6 +1164,33 @@ td strong {
   gap: 22px;
   align-items: start;
 }
+.review-period {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+.review-progress {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 20px 25px;
+}
+.review-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 20px 25px 0;
+}
+@media (max-width: 700px) {
+  .review-period {
+    grid-template-columns: 1fr;
+  }
+  .review-progress {
+    padding: 18px;
+  }
+}
 .payment-heading {
   display: flex;
   align-items: center;

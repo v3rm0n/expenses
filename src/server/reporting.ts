@@ -1,6 +1,7 @@
 import { query, type DB, pool } from "./db";
 import { validDate, parseMoney } from "../lib/money";
 import { AppError } from "./errors";
+import { transactionNeedsReview } from "./transaction-review";
 
 export function dateWindow(month: string) {
   if (!/^\d{4}-\d{2}$/.test(month)) throw new AppError("Choose a valid month.");
@@ -185,10 +186,7 @@ export function transactionFilters(params: URLSearchParams) {
     conditions.push(
       "EXISTS(SELECT 1 FROM receipt_payments rp WHERE rp.transaction_id=t.id)",
     );
-  if (params.get("review") === "true")
-    conditions.push(
-      "t.status='BOOK' AND EXISTS(SELECT 1 FROM allocations ca WHERE ca.transaction_id=t.id AND ca.category_id='uncategorized' AND ca.amount<>0)",
-    );
+  if (params.get("review") === "true") conditions.push(transactionNeedsReview);
   return { where: conditions.join(" AND "), values };
 }
 export async function transactionList(params: URLSearchParams, db: DB = pool) {
@@ -255,7 +253,10 @@ export async function receiptPage(params: URLSearchParams) {
   );
   return { rows, count: count.count, page, limit };
 }
-export async function receiptDetail(id: string) {
+export async function receiptDetail(
+  id: string,
+  preferredTransactionId: string | null = null,
+) {
   const [receipt] = await query("SELECT * FROM receipts WHERE id=$1", [id]);
   if (!receipt) throw new AppError("Receipt not found.", 404);
   const items = await query(
@@ -274,13 +275,14 @@ export async function receiptDetail(id: string) {
     FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE t.status IN ('BOOK','PDNG') AND t.currency=$1 AND t.kind=$2
     AND coalesce(t.booked_at,t.value_at,t.created_at::date) BETWEEN $3::date-1 AND $3::date+7 AND NOT EXISTS(SELECT 1 FROM receipt_payments p WHERE p.receipt_id=$4 AND p.transaction_id=t.id)
     AND abs(t.amount)>coalesce((SELECT sum(p.amount)::bigint FROM receipt_payments p WHERE p.transaction_id=t.id),0)
-    ORDER BY abs(abs(t.amount)-abs($5::bigint)),CASE WHEN t.status='BOOK' THEN 0 ELSE 1 END,t.booked_at,t.id LIMIT 30`,
+    ORDER BY CASE WHEN t.id=$6::uuid THEN 0 ELSE 1 END,abs(abs(t.amount)-abs($5::bigint)),CASE WHEN t.status='BOOK' THEN 0 ELSE 1 END,t.booked_at,t.id LIMIT 30`,
           [
             receipt.currency,
             receipt.total > 0 ? "expense" : "refund",
             receipt.purchased_at,
             id,
             receipt.total,
+            preferredTransactionId,
           ],
         )
       : [];
@@ -303,7 +305,7 @@ export async function applicationState() {
     "SELECT DISTINCT currency FROM (SELECT currency FROM transactions UNION SELECT currency FROM accounts UNION SELECT currency FROM receipts UNION SELECT 'EUR') x WHERE currency IS NOT NULL ORDER BY currency",
   );
   const [review] = await query(`SELECT
-    (SELECT count(*)::int FROM transactions t WHERE status='BOOK' AND EXISTS(SELECT 1 FROM allocations a WHERE a.transaction_id=t.id AND a.category_id='uncategorized' AND a.amount<>0)) AS transactions,
+    (SELECT count(*)::int FROM transactions t WHERE ${transactionNeedsReview}) AS transactions,
     (SELECT count(*)::int FROM receipts r WHERE status IN ('review','ready') OR status='matched' AND coalesce((SELECT sum(p.amount) FROM receipt_payments p WHERE p.receipt_id=r.id),0)<abs(r.total)) AS receipts,
     (SELECT count(*)::int FROM inbound_emails WHERE status IN ('review','error')) AS emails`);
   return {

@@ -135,7 +135,7 @@ test("owner setup, cash ledger, receipt corrections and mobile overview", async 
     fullPage: true,
   });
   await page.getByRole("button", { name: "Open navigation" }).click();
-  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await page.getByRole("button", { name: /^Review(?: \d+)?$/ }).click();
   await expect(
     page.getByRole("heading", { name: "Review", exact: true }),
   ).toBeVisible();
@@ -675,4 +675,191 @@ test("receipt-not-required toggle persists, adjusts coverage and preserves class
   );
   expect(invalid.status()).toBe(400);
   expect((await detail()).receipt_not_required).toBe(false);
+});
+
+test("guided period review saves, skips, imports receipts and resumes the current transaction", async ({
+  page,
+}) => {
+  const headers = { Origin: "http://127.0.0.1:4318" };
+  await page.request.post("/api/auth/login", { headers, data: { password } });
+  const prefix = randomUUID().slice(0, 8);
+  const create = async (
+    merchant: string,
+    date: string,
+    category = "uncategorized",
+    amount = "3.00",
+    exempt = false,
+  ) => {
+    const response = await page.request.post("/api/transactions", {
+      headers,
+      data: {
+        merchant,
+        amount,
+        date,
+        currency: "EUR",
+        kind: "expense",
+        category,
+        idempotencyKey: randomUUID(),
+      },
+    });
+    expect(response.status()).toBe(201);
+    const { id } = await response.json();
+    if (exempt)
+      expect(
+        (
+          await page.request.post(
+            `/api/transactions/${id}/receipt-requirement`,
+            { headers, data: { receiptNotRequired: true } },
+          )
+        ).ok(),
+      ).toBe(true);
+    return id;
+  };
+  const first = await create(`Review first ${prefix}`, "2027-03-01");
+  const second = await create(
+    `Rimi review second ${prefix}`,
+    "2027-03-02",
+    "groceries",
+    "5.10",
+  );
+  const skipped = await create(
+    `Review skipped ${prefix}`,
+    "2027-03-03",
+    "uncategorized",
+    "4.00",
+    true,
+  );
+  await create(`Review handled ${prefix}`, "2027-03-04", "gifts", "1.00", true);
+  await create(`Outside review ${prefix}`, "2027-02-28");
+  const queue = await page.request.get(
+    "/api/review/transactions?from=2027-03-01&to=2027-03-31&currency=EUR",
+  );
+  expect((await queue.json()).ids).toEqual([first, second, skipped]);
+  await page.goto("/review");
+  await page.getByLabel("From", { exact: true }).fill("2027-03-01");
+  await page.getByLabel("Through", { exact: true }).fill("2027-03-31");
+  await expect(
+    page.getByText("3 transactions need attention in this period."),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Start review", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: `Review first ${prefix}`, exact: true }),
+  ).toBeVisible();
+  await page.getByLabel("Category amount 1", { exact: true }).fill("2.99");
+  await page
+    .getByRole("button", { name: "Save and next", exact: true })
+    .click();
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "Category allocations must equal" }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(first));
+  await page.getByLabel("Category amount 1", { exact: true }).fill("3.00");
+  await page
+    .getByLabel("Category 1", { exact: true })
+    .selectOption("subscriptions");
+  await page.getByLabel("Receipt not required", { exact: true }).check();
+  await expect(page.getByRole("status")).toHaveText(
+    "Payment excluded from receipt coverage.",
+  );
+  await expect(page.getByLabel("Category 1", { exact: true })).toHaveValue(
+    "subscriptions",
+  );
+  await page
+    .getByRole("button", { name: "Save and next", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: `Rimi review second ${prefix}`,
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Import receipt", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Back to review", exact: true }),
+  ).toBeVisible();
+  await page.getByLabel("Receipt files").setInputFiles({
+    name: `review-receipt-${prefix}.txt`,
+    mimeType: "text/plain",
+    buffer: Buffer.from(receiptText("Rimi", `REVIEW-${prefix}`, "02.03.2027")),
+  });
+  await page
+    .getByRole("button", { name: "Import receipts", exact: true })
+    .click();
+  const row = page
+    .getByRole("row")
+    .filter({ hasText: `review-receipt-${prefix}.txt` });
+  await expect(row.getByText("Linked", { exact: true })).toBeVisible({
+    timeout: 30000,
+  });
+  await row.getByRole("button").click();
+  await page
+    .getByRole("button", { name: "Back to review", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: `Rimi review second ${prefix}`,
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.locator(".review-checks")).toContainText("Receipt linked");
+  await page
+    .getByRole("button", { name: "Save and next", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: `Review skipped ${prefix}`,
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: "Skip for now", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Review pass complete", exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Review pass complete", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Review remaining transactions", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: `Review skipped ${prefix}`,
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Category 1", { exact: true })
+    .selectOption("transport");
+  await page
+    .getByRole("button", { name: "Save and next", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "All caught up", exact: true }),
+  ).toBeVisible();
+  expect(
+    (
+      await (
+        await page.request.get(
+          "/api/review/transactions?from=2027-03-01&to=2027-03-31&currency=EUR",
+        )
+      ).json()
+    ).ids,
+  ).toEqual([]);
+  await page
+    .getByRole("button", { name: "Choose another period", exact: true })
+    .click();
+  await expect(page.getByLabel("From", { exact: true })).toHaveValue(
+    "2027-03-01",
+  );
 });

@@ -230,6 +230,8 @@ export type Entry = {
     merchant: string;
     total: number;
     currency: string;
+    linked_amount: number;
+    status: string;
   }>;
   raw?: unknown;
 };
