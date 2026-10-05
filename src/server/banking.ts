@@ -437,6 +437,11 @@ async function settlePendingPayment(entryId: string, db: DB) {
       0,
     );
     if (linkedAmount <= Math.abs(amount)) {
+      if (predecessor.receipt_not_required)
+        await db.query(
+          "UPDATE transactions SET receipt_not_required=true WHERE id=$1",
+          [entry.id],
+        );
       if (predecessor.manual && !entry.manual) {
         await db.query(
           "UPDATE transactions SET kind=$2,manual=true,note=$3 WHERE id=$1",
@@ -604,7 +609,7 @@ export async function syncBank(
           );
           await tx.query(
             `UPDATE transactions t SET status='SUPERSEDED',updated_at=now() WHERE account_id=$1 AND status='PDNG'
-            AND source_key LIKE 'fp:%' AND NOT (source_key=ANY($2::text[])) AND NOT manual
+            AND source_key LIKE 'fp:%' AND NOT (source_key=ANY($2::text[])) AND NOT manual AND NOT receipt_not_required
             AND (booked_at IS NULL OR $3::date IS NULL OR booked_at >= $3::date)
             AND NOT EXISTS(SELECT 1 FROM receipt_payments p WHERE p.transaction_id=t.id)`,
             [account.id, keys, base.get("date_from")],

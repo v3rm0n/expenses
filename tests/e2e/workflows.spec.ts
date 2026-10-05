@@ -604,3 +604,77 @@ test("bulk categorization spans history, keeps each amount and preserves manual 
   ]);
   expect((await detail(linked)).allocations).toEqual(before[3].allocations);
 });
+
+test("receipt-not-required toggle persists, adjusts coverage and preserves classification", async ({
+  page,
+}) => {
+  const headers = { Origin: "http://127.0.0.1:4318" };
+  await page.request.post("/api/auth/login", { headers, data: { password } });
+  const merchant = `No receipt ${randomUUID().slice(0, 8)}`;
+  const response = await page.request.post("/api/transactions", {
+    headers,
+    data: {
+      merchant,
+      amount: "8.25",
+      date: "2027-02-01",
+      currency: "EUR",
+      kind: "expense",
+      category: "uncategorized",
+      idempotencyKey: randomUUID(),
+    },
+  });
+  expect(response.status()).toBe(201);
+  const { id } = await response.json();
+  await page.request.post(`/api/transactions/${id}`, {
+    headers,
+    data: { kind: "expense", automatic: true },
+  });
+  const detail = async () =>
+    (await page.request.get(`/api/transactions/${id}`)).json();
+  const overview = async () =>
+    (await page.request.get("/api/overview?month=2027-02&currency=EUR")).json();
+  const before = await detail();
+  expect(before.manual).toBe(false);
+  expect((await overview()).receipt_required_count).toBe(1);
+  await page.goto(`/transactions/${id}`);
+  await page.getByLabel("Receipt not required", { exact: true }).check();
+  await expect(page.getByRole("status")).toHaveText(
+    "Payment excluded from receipt coverage.",
+  );
+  await page.reload();
+  await expect(
+    page.getByLabel("Receipt not required", { exact: true }),
+  ).toBeChecked();
+  const after = await detail();
+  expect(after.receipt_not_required).toBe(true);
+  expect(after.manual).toBe(before.manual);
+  expect(after.allocations).toEqual(before.allocations);
+  const excluded = await overview();
+  expect(excluded.receipt_required_count).toBe(0);
+  expect(excluded.receipt_excluded_count).toBe(1);
+  expect(excluded.spending).toBe(825);
+  await page.goto("/transactions?month=2027-02&currency=EUR&receipt=missing");
+  await expect(
+    page.getByRole("button", { name: new RegExp(merchant) }),
+  ).toHaveCount(0);
+  await page.getByLabel("Filter receipt status").selectOption("not_required");
+  await expect(
+    page.getByRole("button", { name: new RegExp(merchant) }),
+  ).toBeVisible();
+  await page.goto("/?month=2027-02&currency=EUR");
+  await expect(
+    page.getByText("No receipts required", { exact: true }),
+  ).toBeVisible();
+  await page.goto(`/transactions/${id}`);
+  await page.getByLabel("Receipt not required", { exact: true }).uncheck();
+  await expect(page.getByRole("status")).toHaveText(
+    "Payment included in receipt coverage.",
+  );
+  expect((await overview()).receipt_required_count).toBe(1);
+  const invalid = await page.request.post(
+    `/api/transactions/${id}/receipt-requirement`,
+    { headers, data: { receiptNotRequired: "yes" } },
+  );
+  expect(invalid.status()).toBe(400);
+  expect((await detail()).receipt_not_required).toBe(false);
+});

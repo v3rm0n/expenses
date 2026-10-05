@@ -256,6 +256,41 @@ export async function handleApi(
     if (
       segments[0] === "transactions" &&
       segments.length === 3 &&
+      segments[2] === "receipt-requirement" &&
+      method === "POST"
+    ) {
+      const id = uuid(segments[1]);
+      const input = z
+        .object({ receiptNotRequired: z.boolean() })
+        .strict()
+        .parse(await request.json());
+      await transaction(async (db) => {
+        const [entry] = await query(
+          "SELECT receipt_not_required FROM transactions WHERE id=$1 FOR UPDATE",
+          [id],
+          db,
+        );
+        if (!entry) throw new AppError("Transaction not found.", 404);
+        await db.query(
+          "UPDATE transactions SET receipt_not_required=$2,updated_at=now() WHERE id=$1",
+          [id, input.receiptNotRequired],
+        );
+        await db.query(
+          "INSERT INTO corrections(entity,entity_id,change) VALUES('transaction',$1,$2)",
+          [
+            id,
+            JSON.stringify({
+              ...input,
+              previousReceiptNotRequired: entry.receipt_not_required,
+            }),
+          ],
+        );
+      });
+      return json({ ok: true });
+    }
+    if (
+      segments[0] === "transactions" &&
+      segments.length === 3 &&
       segments[2] === "similar" &&
       method === "GET"
     ) {

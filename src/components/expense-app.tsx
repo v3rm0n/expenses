@@ -467,6 +467,8 @@ type Summary = {
   transactions: number;
   expense_count: number;
   receipt_count: number;
+  receipt_required_count: number;
+  receipt_excluded_count: number;
   uncategorized: { amount: number; count: number };
   categories: Array<{
     id: string;
@@ -508,8 +510,8 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
       </>
     );
   const fmt = (value: number) => formatMoney(value, ctx.currency),
-    coverage = data.expense_count
-      ? Math.round((data.receipt_count / data.expense_count) * 100)
+    coverage = data.receipt_required_count
+      ? Math.round((data.receipt_count / data.receipt_required_count) * 100)
       : 0;
   const positive = data.categories.filter((c) => c.amount > 0),
     categoryTotal = positive.reduce((sum, c) => sum + c.amount, 0);
@@ -614,11 +616,18 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
             </span>
           </div>
           <div className="metric-value">
-            {coverage}
-            <span className="metric-unit">%</span>
+            {data.receipt_required_count ? coverage : "—"}
+            {data.receipt_required_count > 0 && (
+              <span className="metric-unit">%</span>
+            )}
           </div>
           <div className="metric-caption">
-            {data.receipt_count} of {data.expense_count} payments linked
+            {data.receipt_required_count
+              ? `${data.receipt_count} of ${data.receipt_required_count} payments linked`
+              : "No receipts required"}
+            {data.receipt_excluded_count > 0 && (
+              <div>{data.receipt_excluded_count} payments excluded</div>
+            )}
           </div>
           <div className="progress">
             <i style={{ width: `${coverage}%` }} />

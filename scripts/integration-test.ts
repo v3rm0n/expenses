@@ -151,6 +151,98 @@ try {
     },
   );
   await check(
+    "receipt exemptions adjust coverage and missing filters without changing spending, and survive bank settlement",
+    async () => {
+      const { transactionList } = await import("../src/server/reporting");
+      const pending = {
+        ...bank("receipt-exempt-pending", "6.00", "Coverage Merchant"),
+        status: "PDNG",
+        booking_date: "2027-01-03",
+      };
+      await transaction((db) =>
+        importBankTransactions(account.id, [pending], db),
+      );
+      const [row] = await query(
+        "SELECT id FROM transactions WHERE source_reference=$1",
+        ["receipt-exempt-pending"],
+      );
+      await query(
+        "UPDATE transactions SET receipt_not_required=true WHERE id=$1",
+        [row.id],
+      );
+      const booked = {
+        ...bank("receipt-exempt-booked", "6.00", "Coverage Merchant"),
+        booking_date: "2027-01-04",
+      };
+      await transaction((db) =>
+        importBankTransactions(account.id, [booked], db),
+      );
+      await transaction((db) =>
+        importBankTransactions(account.id, [booked], db),
+      );
+      const [settled] = await query(
+        "SELECT id,receipt_not_required,manual FROM transactions WHERE source_reference=$1",
+        ["receipt-exempt-booked"],
+      );
+      assert.equal(settled.receipt_not_required, true);
+      assert.equal(settled.manual, false);
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [
+            {
+              ...bank("coverage-linked", "5.10", "Rimi"),
+              booking_date: "2027-01-03",
+            },
+          ],
+          db,
+        ),
+      );
+      const receipt = await storeReceipt(
+        Buffer.from(receiptText("Rimi", "COVERAGE-1", "03.01.2027")),
+        "coverage.txt",
+      );
+      await processReceipt(receipt.id);
+      const [link] = await query(
+        "SELECT transaction_id FROM receipt_payments WHERE receipt_id=$1",
+        [receipt.id],
+      );
+      assert.ok(link);
+      const summary = await overview("2027-01", "EUR");
+      assert.equal(summary.expense_count, 2);
+      assert.equal(summary.receipt_required_count, 1);
+      assert.equal(summary.receipt_excluded_count, 1);
+      assert.equal(summary.receipt_count, 1);
+      assert.equal(summary.spending, 1110);
+      const filters = (receipt: string) =>
+        new URLSearchParams({ month: "2027-01", currency: "EUR", receipt });
+      assert.equal((await transactionList(filters("missing"))).count, 0);
+      assert.deepEqual(
+        (await transactionList(filters("not_required"))).rows.map(
+          (row) => row.id,
+        ),
+        [settled.id],
+      );
+      // Excluded payments never inflate the numerator, even if linked later.
+      await query(
+        "UPDATE transactions SET receipt_not_required=true WHERE id=$1",
+        [link.transaction_id],
+      );
+      const allExcluded = await overview("2027-01", "EUR");
+      assert.equal(allExcluded.receipt_required_count, 0);
+      assert.equal(allExcluded.receipt_count, 0);
+      assert.equal(allExcluded.spending, summary.spending);
+      await query(
+        "UPDATE transactions SET receipt_not_required=false WHERE id=ANY($1::uuid[])",
+        [[settled.id, link.transaction_id]],
+      );
+      const restored = await overview("2027-01", "EUR");
+      assert.equal(restored.receipt_required_count, 2);
+      assert.equal(restored.receipt_count, 1);
+      assert.equal((await transactionList(filters("missing"))).count, 1);
+    },
+  );
+  await check(
     "identical purchases without references survive as a multiset",
     async () => {
       const record = bank(undefined, "1.00", "Coop");

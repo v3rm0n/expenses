@@ -116,3 +116,6 @@ CREATE TABLE IF NOT EXISTS retailer_receipts (
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (retailer, account_key, external_id)
 );
+
+-- Owner-selected exemptions affect receipt coverage, independently of categories.
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS receipt_not_required boolean NOT NULL DEFAULT false;

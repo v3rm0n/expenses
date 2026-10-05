@@ -176,6 +176,7 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
             <option value="">Any receipt status</option>
             <option value="linked">Receipt linked</option>
             <option value="missing">Receipt missing</option>
+            <option value="not_required">Receipt not required</option>
           </select>
           <select
             aria-label="Filter booking status"
@@ -415,6 +416,8 @@ export function TransactionDetailView({
   const [applySimilar, setApplySimilar] = useState(false),
     [includeManual, setIncludeManual] = useState(false),
     [similarPattern, setSimilarPattern] = useState("");
+  const [receiptNotRequired, setReceiptNotRequired] = useState(false),
+    [receiptBusy, setReceiptBusy] = useState(false);
   const [kind, setKind] = useState("expense"),
     [note, setNote] = useState(""),
     [automatic, setAutomatic] = useState(false),
@@ -450,6 +453,7 @@ export function TransactionDetailView({
       setIncludeManual(false);
       setSimilarPattern(suggestedDescriptionPattern(data.description));
       setKind(data.kind);
+      setReceiptNotRequired(data.receipt_not_required);
       setNote(data.note);
       setAutomatic(false);
       setRows(
@@ -498,6 +502,28 @@ export function TransactionDetailView({
       setSaveError((e as Error).message);
     } finally {
       setBusy(false);
+    }
+  };
+  const updateReceiptRequirement = async (value: boolean) => {
+    const previous = receiptNotRequired;
+    setReceiptNotRequired(value);
+    setReceiptBusy(true);
+    setSaveError(null);
+    try {
+      await api(`transactions/${id}/receipt-requirement`, {
+        receiptNotRequired: value,
+      });
+      ctx.notify(
+        value
+          ? "Payment excluded from receipt coverage."
+          : "Payment included in receipt coverage.",
+      );
+      ctx.refresh();
+    } catch (e) {
+      setReceiptNotRequired(previous);
+      setSaveError((e as Error).message);
+    } finally {
+      setReceiptBusy(false);
     }
   };
   const remove = async () => {
@@ -765,6 +791,25 @@ export function TransactionDetailView({
         </section>
         <aside className="panel">
           <SectionTitle title="Receipts" />
+          {["expense", "refund"].includes(data.kind) && (
+            <div className="padded-form">
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={receiptNotRequired}
+                  disabled={receiptBusy}
+                  onChange={(e) =>
+                    void updateReceiptRequirement(e.target.checked)
+                  }
+                />
+                Receipt not required
+              </label>
+              <p className="form-help">
+                Exclude this payment from receipt coverage and the missing
+                receipts list. This choice is saved immediately.
+              </p>
+            </div>
+          )}
           {data.receipts?.length ? (
             <div className="linked-list">
               {data.receipts.map((receipt) => (
@@ -783,8 +828,16 @@ export function TransactionDetailView({
             </div>
           ) : (
             <Empty
-              title="No receipt linked"
-              text="Upload the retailer receipt to split this payment into product categories."
+              title={
+                receiptNotRequired
+                  ? "Receipt not required"
+                  : "No receipt linked"
+              }
+              text={
+                receiptNotRequired
+                  ? "This payment is excluded from receipt coverage. You can still attach a receipt if you find one."
+                  : "Upload the retailer receipt to split this payment into product categories."
+              }
             >
               <button
                 className="button secondary"

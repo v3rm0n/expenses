@@ -22,13 +22,17 @@ export async function overview(month: string, currency: string) {
     income: number;
     expense_count: number;
     receipt_count: number;
+    receipt_required_count: number;
+    receipt_excluded_count: number;
   }>(
     `SELECT count(*)::int AS transactions,
     coalesce(sum(-amount) FILTER(WHERE kind='expense'),0)::bigint AS gross_spending,
     coalesce(sum(amount) FILTER(WHERE kind='refund'),0)::bigint AS refunds,
     coalesce(sum(amount) FILTER(WHERE kind='income'),0)::bigint AS income,
     count(*) FILTER(WHERE kind IN ('expense','refund'))::int AS expense_count,
-    count(*) FILTER(WHERE kind IN ('expense','refund') AND EXISTS(SELECT 1 FROM receipt_payments p WHERE p.transaction_id=t.id))::int AS receipt_count
+    count(*) FILTER(WHERE kind IN ('expense','refund') AND NOT receipt_not_required)::int AS receipt_required_count,
+    count(*) FILTER(WHERE kind IN ('expense','refund') AND receipt_not_required)::int AS receipt_excluded_count,
+    count(*) FILTER(WHERE kind IN ('expense','refund') AND NOT receipt_not_required AND EXISTS(SELECT 1 FROM receipt_payments p WHERE p.transaction_id=t.id))::int AS receipt_count
     FROM transactions t WHERE status='BOOK' AND currency=$1 AND booked_at >= $2 AND booked_at < $3`,
     [currency, from, to],
   );
@@ -171,7 +175,11 @@ export function transactionFilters(params: URLSearchParams) {
     );
   if (params.get("receipt") === "missing")
     conditions.push(
-      "NOT EXISTS(SELECT 1 FROM receipt_payments rp WHERE rp.transaction_id=t.id) AND t.kind IN ('expense','refund')",
+      "NOT EXISTS(SELECT 1 FROM receipt_payments rp WHERE rp.transaction_id=t.id) AND t.kind IN ('expense','refund') AND NOT t.receipt_not_required",
+    );
+  if (params.get("receipt") === "not_required")
+    conditions.push(
+      "t.receipt_not_required AND t.kind IN ('expense','refund')",
     );
   if (params.get("receipt") === "linked")
     conditions.push(
@@ -193,7 +201,7 @@ export async function transactionList(params: URLSearchParams, db: DB = pool) {
   const limit = Math.min(100, Math.max(1, Number(params.get("limit")) || 50)),
     page = Math.max(1, Number(params.get("page")) || 1);
   const rows = await query(
-    `SELECT t.id,t.account_id,t.amount,t.currency,t.kind,t.status,t.booked_at,t.merchant,t.description,t.manual,t.note,a.name AS account_name,a.source,
+    `SELECT t.id,t.account_id,t.amount,t.currency,t.kind,t.status,t.booked_at,t.merchant,t.description,t.manual,t.note,t.receipt_not_required,a.name AS account_name,a.source,
     coalesce((SELECT jsonb_agg(jsonb_build_object('category_id',al.category_id,'name',c.name,'color',c.color,'amount',al.amount,'source',al.source)) FROM allocations al JOIN categories c ON c.id=al.category_id WHERE al.transaction_id=t.id),'[]') AS allocations,
     (SELECT count(*)::int FROM receipt_payments p WHERE p.transaction_id=t.id) AS receipt_count FROM transactions t JOIN accounts a ON a.id=t.account_id
     WHERE ${where} ORDER BY t.booked_at DESC,t.created_at DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,

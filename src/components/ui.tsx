@@ -216,6 +216,7 @@ export type Entry = {
   manual: boolean;
   note: string;
   receipt_count?: number;
+  receipt_not_required: boolean;
   allocations: Array<{
     category_id: string;
     amount: number;
@@ -377,6 +378,9 @@ export function EntryTable({
               </td>
               <td className="entry-account muted small">
                 {entry.account_name}
+                {entry.receipt_not_required && (
+                  <div className="receipt-marker">Receipt not required</div>
+                )}
                 {Boolean(entry.receipt_count) && (
                   <div className="receipt-marker">Receipt linked</div>
                 )}
