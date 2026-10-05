@@ -32,6 +32,7 @@ import {
 } from "./ui";
 import { formatMoney, parseMoney } from "../lib/money";
 import type { EmailMessage } from "../lib/email-message";
+import { AmazonImport } from "./amazon-import";
 
 type Bank = { name: string; country: string; maximum_consent_validity: number };
 type Connection = {
@@ -761,6 +762,7 @@ export function SettingsView({ context: ctx }: { context: AppContext }) {
         />
         <LidlForm context={ctx} connection={s.lidl} />
       </section>
+      <AmazonImport context={ctx} />
       <section className="panel">
         <SectionTitle
           title="Received email"

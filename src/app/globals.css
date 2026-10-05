@@ -1169,6 +1169,14 @@ td strong {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
+.amazon-steps {
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.amazon-steps li + li {
+  margin-top: 8px;
+}
 .review-progress {
   display: flex;
   justify-content: space-between;

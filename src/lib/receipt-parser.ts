@@ -5,11 +5,17 @@ import { parsePartnerkaartCsv } from "./partnerkaart-csv";
 import { parseWoltReceipt } from "./wolt-receipt";
 import { parseLidlReceipt } from "./lidl-receipt";
 import { parseCoopReceipt } from "./coop-receipt";
+import { parseAmazonReceipt } from "./amazon-receipt";
 
 const profiles: Record<
   Retailer,
   { merchant: string; total: RegExp; ignore: RegExp }
 > = {
+  amazon: {
+    merchant: "Amazon.de",
+    total: /^(?:Gesamtpreis|Total)\b/i,
+    ignore: /^(?:USt|VAT)\b/i,
+  },
   wolt: {
     merchant: "Wolt",
     total: /^total\b/i,
@@ -213,6 +219,8 @@ export function parseReceipt(text: string, hint?: Retailer): ParsedReceipt {
     .replace(/^\uFEFF/, "")
     .replace(/\r/g, "")
     .replace(/\u00a0/g, " ");
+  const amazon = parseAmazonReceipt(text, hint);
+  if (amazon) return amazon;
   const coop = parseCoopReceipt(text, hint);
   if (coop) return coop;
   const csv = parsePartnerkaartCsv(text);

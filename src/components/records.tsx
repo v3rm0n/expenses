@@ -1041,17 +1041,20 @@ export function ReceiptsView({ context: ctx }: { context: AppContext }) {
         <div>
           <h2>Import receipts</h2>
           <p>
-            Drop your receipts here or choose files. PDF, PNG, JPEG, CSV, TXT
-            and forwarded EML emails.
+            Drop your receipts here or choose files. PDF, PNG, JPEG, CSV, TXT,
+            forwarded EML emails, and Amazon invoice packs.
           </p>
-          <small>Up to 20 files · 15 MB per receipt · 20 MB per email</small>
+          <small>
+            Up to 20 files · 15 MB per receipt · 20 MB per email · 70 MB per
+            Amazon pack
+          </small>
         </div>
         <div className="upload-actions">
           <input
             ref={input}
             type="file"
             multiple
-            accept=".pdf,.png,.jpg,.jpeg,.csv,.txt,.eml"
+            accept=".pdf,.png,.jpg,.jpeg,.csv,.txt,.eml,.amazon.json"
             className="visually-hidden"
             aria-label="Receipt files"
             onChange={(e) => setFiles(Array.from(e.target.files || []))}
@@ -1074,6 +1077,7 @@ export function ReceiptsView({ context: ctx }: { context: AppContext }) {
             <option value="coop">Coop</option>
             <option value="lidl">Lidl</option>
             <option value="wolt">Wolt</option>
+            <option value="amazon">Amazon.de</option>
           </select>
         </div>
       </section>
@@ -1105,6 +1109,7 @@ export function ReceiptsView({ context: ctx }: { context: AppContext }) {
               <option value="coop">Coop</option>
               <option value="lidl">Lidl</option>
               <option value="wolt">Wolt</option>
+              <option value="amazon">Amazon.de</option>
               <option value="unknown">Other</option>
             </select>
           }
@@ -1443,6 +1448,7 @@ export function ReceiptDetailView({
                       <option value="coop">Coop</option>
                       <option value="lidl">Lidl</option>
                       <option value="wolt">Wolt</option>
+                      <option value="amazon">Amazon.de</option>
                     </select>
                   </label>
                   <label>

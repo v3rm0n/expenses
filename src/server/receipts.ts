@@ -62,8 +62,15 @@ export async function storeReceipt(
           "This receipt was already associated with a different order total. Review the original email.",
         );
       await query(
-        "UPDATE receipts SET order_id=$2,order_total=$3,order_currency=$4,retailer=CASE WHEN manual THEN retailer ELSE 'wolt' END,status=CASE WHEN NOT manual AND status='review' THEN 'processing' ELSE status END WHERE id=$1",
-        [existing.id, order.orderId, order.total, order.currency],
+        "UPDATE receipts SET order_id=$2,order_total=$3,order_currency=$4,order_document_count=greatest(order_document_count,$6),retailer=CASE WHEN manual THEN retailer ELSE $5 END,status=CASE WHEN NOT manual AND status='review' THEN 'processing' ELSE status END WHERE id=$1",
+        [
+          existing.id,
+          order.orderId,
+          order.total,
+          order.currency,
+          order.retailer || "wolt",
+          order.documentCount || null,
+        ],
       );
       await enqueue("receipt-parse", { receiptId: existing.id }, existing.id);
     }
@@ -76,8 +83,8 @@ export async function storeReceipt(
   });
   await writeFile(storageFile(relative), buffer, { mode: 0o600 });
   const [receipt] = await query(
-    `INSERT INTO receipts(file_hash,filename,content_type,storage_path,retailer,source,order_id,order_total,order_currency)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(file_hash) DO UPDATE SET file_hash=excluded.file_hash RETURNING id`,
+    `INSERT INTO receipts(file_hash,filename,content_type,storage_path,retailer,source,order_id,order_total,order_currency,order_document_count)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(file_hash) DO UPDATE SET file_hash=excluded.file_hash RETURNING id`,
     [
       hash,
       path
@@ -91,6 +98,7 @@ export async function storeReceipt(
       order?.orderId || null,
       order?.total ?? null,
       order?.currency || null,
+      order?.documentCount || null,
     ],
   );
   await enqueue("receipt-parse", { receiptId: receipt.id }, receipt.id);
@@ -196,7 +204,7 @@ export async function processReceipt(id: string) {
     ) {
       parsed.valid = false;
       parsed.issues.push(
-        "The receipt order ID or currency differs from its email. Review the documents.",
+        "The receipt order ID or currency differs from its import. Review the documents.",
       );
     }
     await transaction(async (db) => {

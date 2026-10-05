@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { config } from "./config";
 import { transactionReviewQueue } from "./transaction-review";
+import { importAmazonPack, MAX_AMAZON_PACK_SIZE } from "./amazon";
 import {
   similarTransactions,
   type SimilarTransaction,
@@ -534,17 +535,39 @@ export async function handleApi(
       if (!files.length || files.length > 20)
         throw new AppError("Choose between 1 and 20 files.");
       const hint = z
-        .enum(["unknown", "rimi", "partnerkaart", "coop", "lidl", "wolt"])
+        .enum([
+          "unknown",
+          "rimi",
+          "partnerkaart",
+          "coop",
+          "lidl",
+          "wolt",
+          "amazon",
+        ])
         .parse(form.get("retailer") || "unknown");
       const results = [];
       for (const file of files) {
         try {
           if (
             file.size >
-            (/\.eml$/i.test(file.name) ? MAX_EMAIL_SIZE : MAX_FILE_SIZE)
+            (/\.amazon\.json$/i.test(file.name)
+              ? MAX_AMAZON_PACK_SIZE
+              : /\.eml$/i.test(file.name)
+                ? MAX_EMAIL_SIZE
+                : MAX_FILE_SIZE)
           )
             throw new AppError("This file exceeds the size limit.");
           const buffer = Buffer.from(await file.arrayBuffer());
+          if (/\.amazon\.json$/i.test(file.name)) {
+            const pack = await importAmazonPack(buffer);
+            results.push(...pack.results);
+            if (pack.missing)
+              results.push({
+                filename: file.name,
+                error: `${pack.missing} Amazon orders have no downloadable invoice. Their payments remain available for review.`,
+              });
+            continue;
+          }
           const result = /\.eml$/i.test(file.name)
             ? { ...(await receiveEmail(buffer)), email: true }
             : await storeReceipt(buffer, file.name, hint as Retailer);
@@ -605,6 +628,7 @@ export async function handleApi(
               "coop",
               "lidl",
               "wolt",
+              "amazon",
             ]),
             purchased_at: dateInput,
             receipt_number: z.string().max(100).nullable().optional(),

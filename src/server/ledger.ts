@@ -180,6 +180,10 @@ export async function autoMatchReceipt(receiptId: string, db: DB = pool) {
     if (receipt.order_id) await autoMatchWoltOrder(receipt.order_id, db);
     return;
   }
+  if (receipt.retailer === "amazon" && receipt.order_id) {
+    await autoMatchAmazonOrder(receipt.order_id, db);
+    return;
+  }
   if (
     (
       await query(
@@ -204,9 +208,11 @@ export async function autoMatchReceipt(receiptId: string, db: DB = pool) {
       -receipt.total,
       receipt.total > 0 ? "expense" : "refund",
       receipt.purchased_at,
-      receipt.retailer === "coop"
-        ? ["%coop%", "%konsum%", "%maksimarket%"]
-        : [`%${merchant}%`],
+      receipt.retailer === "amazon"
+        ? ["%amazon%", "%amzn%"]
+        : receipt.retailer === "coop"
+          ? ["%coop%", "%konsum%", "%maksimarket%"]
+          : [`%${merchant}%`],
     ],
     db,
   );
@@ -218,6 +224,90 @@ export async function autoMatchReceipt(receiptId: string, db: DB = pool) {
       true,
       db,
     );
+}
+async function autoMatchAmazonOrder(orderId: string, db: DB) {
+  const receipts = await query(
+    "SELECT r.* FROM receipts r WHERE retailer='amazon' AND order_id=$1 AND duplicate_of IS NULL ORDER BY id FOR UPDATE",
+    [orderId],
+    db,
+  );
+  const first = receipts[0];
+  if (!first) return;
+  const candidates = (
+    amount: number,
+    date: string,
+    currency: string,
+    through = date,
+  ) =>
+    query(
+      `SELECT t.id FROM transactions t WHERE t.status='BOOK' AND t.currency=$1 AND t.amount=$2 AND t.kind=$3
+    AND t.booked_at BETWEEN $4::date-1 AND $5::date+7 AND t.merchant ILIKE ANY(ARRAY['%amazon%','%amzn%'])
+    AND NOT EXISTS(SELECT 1 FROM receipt_payments p WHERE p.transaction_id=t.id)`,
+      [currency, -amount, amount > 0 ? "expense" : "refund", date, through],
+      db,
+    );
+  const linked = await query(
+    "SELECT receipt_id FROM receipt_payments WHERE receipt_id=ANY($1::uuid[])",
+    [receipts.map((r) => r.id)],
+    db,
+  );
+  const count = Math.max(...receipts.map((r) => r.order_document_count || 0));
+  if (
+    count > 1 &&
+    receipts.length === count &&
+    !linked.length &&
+    receipts.every(
+      (r) =>
+        r.status === "ready" &&
+        r.purchased_at &&
+        r.currency === first.currency &&
+        Math.sign(r.total) === Math.sign(first.total) &&
+        r.total !== 0,
+    )
+  ) {
+    const total = receipts.reduce((sum, r) => sum + r.total, 0);
+    const dates = receipts.map((r) => r.purchased_at).sort();
+    // A combined charge must fall inside every invoice's matching window.
+    const matches = await candidates(
+      total,
+      dates.at(-1)!,
+      first.currency,
+      dates[0],
+    );
+    if (matches.length === 1) {
+      for (const receipt of receipts)
+        await linkReceipt(
+          receipt.id,
+          matches[0].id,
+          Math.abs(receipt.total),
+          true,
+          db,
+        );
+      return;
+    }
+  }
+  for (const receipt of receipts) {
+    if (
+      receipt.status !== "ready" ||
+      !receipt.total ||
+      !receipt.purchased_at ||
+      linked.some((link) => link.receipt_id === receipt.id)
+    )
+      continue;
+    const matches = await candidates(
+      receipt.total,
+      receipt.purchased_at,
+      receipt.currency,
+    );
+    if (matches.length === 1)
+      await linkReceipt(
+        receipt.id,
+        matches[0].id,
+        Math.abs(receipt.total),
+        true,
+        db,
+      );
+  }
 }
 async function autoMatchWoltOrder(orderId: string, db: DB) {
   const receipts = await query(

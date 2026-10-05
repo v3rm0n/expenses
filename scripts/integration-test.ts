@@ -14,6 +14,8 @@ import {
   woltOrderId,
   lidlReceiptText,
   coopReceiptText,
+  amazonReceiptText,
+  amazonOrderId,
 } from "../tests/fixtures";
 import type { BankTransaction } from "../src/lib/types";
 const database = await isolatedDatabase("integration"),
@@ -1249,6 +1251,255 @@ KUUPÄEV: 02.10.2026`;
       assert.equal(message.status, "complete");
       assert.deepEqual(message.receipt_ids, [uploaded.id]);
       assert.equal((await storeReceipt(csv, "repeat.csv")).id, uploaded.id);
+    },
+  );
+  await check(
+    "Amazon packs match all invoices to a combined charge across delivery dates and preserve manual categories",
+    async () => {
+      const { importAmazonPack } = await import("../src/server/amazon");
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [
+            {
+              ...bank("amazon-combined", "7.40", "AMZN Mktp DE"),
+              booking_date: "2027-01-02",
+            },
+          ],
+          db,
+        ),
+      );
+      const [payment] = await query(
+        "SELECT id FROM transactions WHERE source_reference='amazon-combined'",
+      );
+      await query("UPDATE transactions SET manual=true WHERE id=$1", [
+        payment.id,
+      ]);
+      await query(
+        "UPDATE allocations SET category_id='gifts',source='manual' WHERE transaction_id=$1",
+        [payment.id],
+      );
+      const invoices = ["5.10", "2.30"].map((amount, index) => ({
+        orderId: amazonOrderId,
+        filename: `amazon-${amazonOrderId}-${index + 1}.pdf`,
+        pdf: textPdf(
+          amazonReceiptText(
+            `AMAZON-COMB-${index}`,
+            amount,
+            amazonOrderId,
+            `0${index + 2} January 2027`,
+          ),
+        ).toString("base64"),
+      }));
+      const pack = {
+        format: "expenses-amazon-invoices",
+        version: 1,
+        from: "2027-01-01",
+        to: "2027-01-31",
+        invoices,
+        missing: [],
+      };
+      const imported = await importAmazonPack(
+        Buffer.from(JSON.stringify(pack)),
+      );
+      assert.equal(imported.results.length, 2);
+      await processReceipt(imported.results[0].id);
+      assert.equal(
+        (
+          await query(
+            "SELECT count(*)::int AS n FROM receipt_payments WHERE transaction_id=$1",
+            [payment.id],
+          )
+        )[0].n,
+        0,
+      );
+      await processReceipt(imported.results[1].id);
+      assert.deepEqual(
+        (
+          await query(
+            "SELECT amount FROM receipt_payments WHERE transaction_id=$1 ORDER BY amount",
+            [payment.id],
+          )
+        ).map((r) => r.amount),
+        [230, 510],
+      );
+      assert.deepEqual(
+        await query(
+          "SELECT category_id,amount,source FROM allocations WHERE transaction_id=$1",
+          [payment.id],
+        ),
+        [{ category_id: "gifts", amount: 740, source: "manual" }],
+      );
+      assert.ok(
+        (
+          await importAmazonPack(Buffer.from(JSON.stringify(pack)))
+        ).results.every((r) => r.duplicate),
+      );
+      await importAmazonPack(
+        Buffer.from(JSON.stringify({ ...pack, invoices: [invoices[0]] })),
+      );
+      assert.equal(
+        (
+          await query("SELECT order_document_count FROM receipts WHERE id=$1", [
+            imported.results[0].id,
+          ])
+        )[0].order_document_count,
+        2,
+      );
+      for (const receipt of imported.results) await processReceipt(receipt.id);
+      assert.equal(
+        (
+          await query(
+            "SELECT count(*)::int AS n FROM receipt_payments WHERE transaction_id=$1",
+            [payment.id],
+          )
+        )[0].n,
+        2,
+      );
+    },
+  );
+  await check(
+    "Amazon invoices match separate charges and refunds while ambiguous charges stay in review",
+    async () => {
+      const { importAmazonPack } = await import("../src/server/amazon");
+      const order = "305-2222222-2222222";
+      const amounts = ["11.11", "22.22", "3.33", "4.44"];
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [
+            ...amounts.map((amount, index) => ({
+              ...bank(
+                `amazon-separate-${index}`,
+                amount,
+                index === 3 ? "Amazon.de refund" : "Amazon.de",
+                "EUR",
+                index === 3 ? "CRDT" : "DBIT",
+              ),
+              booking_date: "2027-02-02",
+            })),
+            {
+              ...bank("amazon-ambiguous", "3.33", "Amazon.de"),
+              booking_date: "2027-02-02",
+            },
+          ],
+          db,
+        ),
+      );
+      const pack = {
+        format: "expenses-amazon-invoices",
+        version: 1,
+        from: "2027-02-01",
+        to: "2027-02-28",
+        missing: [],
+        invoices: amounts.map((amount, index) => ({
+          orderId: order,
+          filename: `amazon-${order}-${index + 1}.pdf`,
+          pdf: textPdf(
+            amazonReceiptText(
+              `AMAZON-SEP-${index}`,
+              amount,
+              order,
+              "02 February 2027",
+            ).replace(
+              /^Invoice\n/,
+              index === 3 ? "Credit note\n" : "Invoice\n",
+            ),
+          ).toString("base64"),
+        })),
+      };
+      const imported = await importAmazonPack(
+        Buffer.from(JSON.stringify(pack)),
+      );
+      for (const receipt of imported.results) await processReceipt(receipt.id);
+      const links = await query(
+        "SELECT p.amount,t.kind FROM receipt_payments p JOIN transactions t ON t.id=p.transaction_id WHERE receipt_id=ANY($1::uuid[]) ORDER BY p.amount",
+        [imported.results.map((r) => r.id)],
+      );
+      assert.deepEqual(links, [
+        { amount: 444, kind: "refund" },
+        { amount: 1111, kind: "expense" },
+        { amount: 2222, kind: "expense" },
+      ]);
+      assert.equal(
+        (
+          await query("SELECT status FROM receipts WHERE id=$1", [
+            imported.results[2].id,
+          ])
+        )[0].status,
+        "ready",
+      );
+    },
+  );
+  await check(
+    "Amazon import rejects invalid packs before storing PDFs and verifies invoice order identities",
+    async () => {
+      const { importAmazonPack } = await import("../src/server/amazon");
+      const order = "305-3333333-3333333";
+      const invoice = {
+        orderId: order,
+        filename: `amazon-${order}-1.pdf`,
+        pdf: textPdf(amazonReceiptText("AMAZON-MISMATCH")).toString("base64"),
+      };
+      const pack = {
+        format: "expenses-amazon-invoices",
+        version: 1,
+        from: "2027-03-01",
+        to: "2027-03-31",
+        invoices: [invoice],
+        missing: [],
+      };
+      const [before] = await query("SELECT count(*)::int AS n FROM receipts");
+      await assert.rejects(
+        importAmazonPack(
+          Buffer.from(
+            JSON.stringify({
+              ...pack,
+              invoices: [
+                invoice,
+                {
+                  ...invoice,
+                  pdf: Buffer.from("not a PDF").toString("base64"),
+                },
+              ],
+            }),
+          ),
+        ),
+        /invalid PDF/,
+      );
+      await assert.rejects(
+        importAmazonPack(
+          Buffer.from(JSON.stringify({ ...pack, from: "2027-02-30" })),
+        ),
+        /invalid order dates/,
+      );
+      await assert.rejects(
+        importAmazonPack(
+          Buffer.from(
+            JSON.stringify({
+              ...pack,
+              invoices: [invoice, { ...invoice, orderId: amazonOrderId }],
+            }),
+          ),
+        ),
+        /two Amazon orders/,
+      );
+      assert.equal(
+        (await query("SELECT count(*)::int AS n FROM receipts"))[0].n,
+        before.n,
+      );
+      const imported = await importAmazonPack(
+        Buffer.from(JSON.stringify(pack)),
+      );
+      await processReceipt(imported.results[0].id);
+      assert.equal(
+        (
+          await query("SELECT status FROM receipts WHERE id=$1", [
+            imported.results[0].id,
+          ])
+        )[0].status,
+        "review",
+      );
     },
   );
   await check(

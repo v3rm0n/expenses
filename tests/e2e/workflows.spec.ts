@@ -1,7 +1,12 @@
 import { test, expect } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { receiptText } from "../fixtures";
+import {
+  receiptText,
+  amazonOrderId,
+  amazonReceiptText,
+  textPdf,
+} from "../fixtures";
 const password = "only-for-isolated-test-db";
 test.describe.configure({ mode: "serial" });
 test("owner setup, cash ledger, receipt corrections and mobile overview", async ({
@@ -876,4 +881,182 @@ test("guided period review saves, skips, imports receipts and resumes the curren
   await expect(page.getByLabel("From", { exact: true })).toHaveValue(
     "2027-03-01",
   );
+});
+
+test("Amazon settings import invoice packs and the saved shortcut collects every page and document", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Amazon.de invoices" }),
+  ).toBeVisible();
+  await page.getByLabel("Amazon orders from").fill("2026-09-01");
+  await page.getByLabel("Amazon orders through").fill("2026-09-30");
+  const shortcut = page.getByRole("link", { name: "Download Amazon invoices" });
+  await expect(shortcut).toHaveAttribute("href", /javascript:.*2026-09-30/);
+  const href = (await shortcut.getAttribute("href"))!;
+  const pack = {
+    format: "expenses-amazon-invoices",
+    version: 1,
+    from: "2028-04-01",
+    to: "2028-04-30",
+    missing: [],
+    invoices: [
+      {
+        orderId: amazonOrderId,
+        filename: `amazon-${amazonOrderId}-1.pdf`,
+        pdf: textPdf(
+          amazonReceiptText(
+            "AMAZON-BROWSER-IMPORT",
+            "12.34",
+            amazonOrderId,
+            "02 April 2028",
+          ),
+        ).toString("base64"),
+      },
+    ],
+  };
+  await page.getByLabel("Amazon invoice files").setInputFiles({
+    name: "test.amazon.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(pack)),
+  });
+  await expect(
+    page.getByText(
+      "1 invoices received. Receipts are being checked and matched to payments.",
+    ),
+  ).toBeVisible();
+  await page.goto("/receipts?retailer=amazon&page=1");
+  await expect(page.getByLabel("Filter retailer")).toHaveValue("amazon");
+  await page
+    .getByRole("button", {
+      name: new RegExp(`Amazon.de.*amazon-${amazonOrderId}-1.pdf`),
+    })
+    .click();
+  await expect(page.getByText("Huggies diapers", { exact: true })).toBeVisible({
+    timeout: 30000,
+  });
+
+  const requests: string[] = [];
+  const second = "305-2222222-2222222",
+    third = "305-3333333-3333333";
+  const outside = "305-4444444-4444444";
+  const card = (order: string, date: string, invoice = true) =>
+    `<div class="order-card">Order placed ${date} Order # ${order}${invoice ? `<a href="/-/en/your-orders/invoice/popover?orderId=${order}">Invoice</a>` : ""}</div>`;
+  await page.route("https://www.amazon.de/**", async (route) => {
+    const url = new URL(route.request().url());
+    requests.push(url.pathname + url.search);
+    if (url.pathname.includes("/your-orders/orders")) {
+      if (!url.searchParams.has("timeFilter"))
+        return route.fulfill({ contentType: "text/html", body: "Your Orders" });
+      expect(url.searchParams.get("disableCsd")).toBe("missing-library");
+      return route.fulfill({
+        contentType: "text/html",
+        body: url.searchParams.has("page")
+          ? card(second, "20 September 2026", false) +
+            card(third, "25 September 2026")
+          : card(amazonOrderId, "12 September 2026") +
+            card(outside, "09 August 2026") +
+            '<ul><li class="a-last"><a href="/-/en/your-orders/orders?timeFilter=year-2026&page=2">Next</a></li></ul>',
+      });
+    }
+    if (url.pathname.includes("/invoice/popover")) {
+      const order = url.searchParams.get("orderId");
+      expect(order).not.toBe(outside);
+      return route.fulfill({
+        contentType: "text/html",
+        body: `<a href="/gp/css/summary/print.html">Printable order summary</a><a href="https://example.com/invoice.pdf">Seller page</a><a href="/-/en/documents/download/${order}-1/invoice.pdf">Invoice 1</a>${order === amazonOrderId ? `<a href="/-/en/documents/download/${order}-2/invoice.pdf">Invoice 2</a>` : ""}`,
+      });
+    }
+    if (url.pathname.includes("/documents/download/"))
+      return route.fulfill({
+        contentType: "application/pdf",
+        body: textPdf(amazonReceiptText(url.pathname.split("/").at(-2)!)),
+      });
+    throw new Error(`Unexpected Amazon request: ${url.pathname}`);
+  });
+  await page.goto("https://www.amazon.de/-/en/your-orders/orders");
+  // Execute the actual rendered bookmark source, including the selected dates.
+  const downloaded = await page.evaluate(
+    (source) =>
+      window.eval(
+        decodeURIComponent(source.slice("javascript:".length))
+          .replace(/^void /, "")
+          .replace(/\.catch\(e=>alert\(e\.message\)\)$/, ""),
+      ),
+    href,
+  );
+  expect(downloaded).toMatchObject({
+    format: "expenses-amazon-invoices",
+    from: "2026-09-01",
+    to: "2026-09-30",
+    missing: [second],
+  });
+  expect(
+    downloaded.invoices.map((i: { orderId: string }) => i.orderId),
+  ).toEqual([amazonOrderId, amazonOrderId, third]);
+  expect(
+    requests.filter((url) => url.includes("/documents/download/")),
+  ).toHaveLength(3);
+  expect(requests.some((url) => url.includes("page=2"))).toBe(true);
+});
+
+test("Amazon shortcut reports expired logins and stops on invalid invoice responses", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByLabel("Amazon orders from").fill("2026-10-01");
+  await page.getByLabel("Amazon orders through").fill("2026-10-31");
+  const shortcut = page.getByRole("link", { name: "Download Amazon invoices" });
+  await expect(shortcut).toHaveAttribute("href", /2026-10-31/);
+  const href = (await shortcut.getAttribute("href"))!;
+  const source = decodeURIComponent(href.slice("javascript:".length))
+    .replace(/^void /, "")
+    .replace(/\.catch\(e=>alert\(e\.message\)\)$/, "");
+  let mode = "login";
+  await page.route("https://www.amazon.de/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (!url.search)
+      return route.fulfill({ contentType: "text/html", body: "Your Orders" });
+    if (mode === "login")
+      return route.fulfill({
+        contentType: "text/html",
+        body: '<input type="password">',
+      });
+    if (url.pathname.includes("/invoice/popover"))
+      return route.fulfill({
+        contentType: "text/html",
+        body: '<a href="/-/en/documents/download/test/invoice.pdf">Invoice</a>',
+      });
+    if (url.pathname.includes("/documents/download/"))
+      return route.fulfill({
+        contentType: "text/html",
+        body: "Please sign in",
+      });
+    return route.fulfill({
+      contentType: "text/html",
+      body: `<div class="order-card">02 October 2026 ${amazonOrderId}<a href="/-/en/your-orders/invoice/popover?orderId=${amazonOrderId}">Invoice</a></div>`,
+    });
+  });
+  await page.goto("https://www.amazon.de/-/en/your-orders/orders");
+  const run = async () =>
+    page.evaluate(async (source) => {
+      try {
+        await window.eval(source);
+        return "unexpected success";
+      } catch (error) {
+        return (error as Error).message;
+      }
+    }, source);
+  expect(await run()).toContain("Sign in to Amazon.de");
+  await expect(page.locator("#expenses-amazon-download")).toHaveCount(0);
+  mode = "invalid-pdf";
+  expect(await run()).toContain("missing or oversized invoice");
+  await expect(page.locator("#expenses-amazon-download")).toHaveCount(0);
 });

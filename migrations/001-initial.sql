@@ -122,3 +122,6 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS receipt_not_required boolean N
 
 -- Retire the removed mailbox connection, including its encrypted credentials.
 DELETE FROM settings WHERE key='imap';
+
+-- Only complete Amazon order packs may match a combined payment automatically.
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS order_document_count integer;

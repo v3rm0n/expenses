@@ -1,11 +1,13 @@
 import { parseMoney, prorate, validDate } from "./money";
 import { productCategory } from "./classification";
-import type { ParsedReceipt, ReceiptItem } from "./types";
+import type { ParsedReceipt, ReceiptItem, Retailer } from "./types";
 
 export type ReceiptOrderContext = {
   orderId: string;
-  total: number;
+  total: number | null;
   currency: string;
+  retailer?: Retailer;
+  documentCount?: number;
 };
 const clean = (text: string) =>
   text.replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");

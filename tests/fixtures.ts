@@ -1,4 +1,20 @@
 import { deflateSync } from "node:zlib";
+export const amazonOrderId = "305-1234567-1234567";
+export const amazonReceiptText = (
+  number = "TEST-AMAZON-1",
+  amount = "5.10",
+  orderId = amazonOrderId,
+  date = "02 October 2026",
+) => `Invoice
+Sold by Amazon EU S.a r.l.
+Invoice date / Delivery date ${date}
+Invoice number ${number}
+Amount payable ${amount} EUR
+Order number ${orderId}
+Description Quantity Unit price VAT % Unit price Subtotal
+Huggies diapers 1 ${amount} EUR 24% ${amount} EUR ${amount} EUR
+ASIN: TEST-ASIN
+Invoice total ${amount} EUR`;
 // Synthetic examples exercise parser contracts; these are not retailer exports.
 export const receiptText = (
   retailer = "Rimi",
