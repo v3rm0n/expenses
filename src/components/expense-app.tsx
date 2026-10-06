@@ -1,10 +1,10 @@
 "use client";
+import { useDialogFocus } from "../hooks/use-dialog-focus";
 import { ISODateInput } from "./iso-date-input";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowUpRight,
-  ArrowDownLeft,
   BarChart3,
   WalletCards,
   ReceiptText,
@@ -28,7 +28,6 @@ import {
   useData,
   Loading,
   ErrorMessage,
-  Badge,
   Empty,
   SectionTitle,
   TextLink,
@@ -45,6 +44,7 @@ import {
   ReceiptsView,
   ReceiptDetailView,
 } from "./records";
+import { PeriodOverview } from "./overview";
 import { ReviewView } from "./review";
 import { ConnectionsView, RulesView, SettingsView } from "./settings";
 
@@ -67,6 +67,14 @@ export default function ExpenseApp() {
   const router = useRouter(),
     pathname = usePathname(),
     search = useSearchParams();
+  const requestedMonths = Number(search.get("months") || 1);
+  const [periodMonths, setPeriodMonths] = useState(
+    Number.isInteger(requestedMonths) &&
+      requestedMonths >= 1 &&
+      requestedMonths <= 12
+      ? requestedMonths
+      : 1,
+  );
   const [authenticated, setAuthenticated] = useState(false),
     [checking, setChecking] = useState(true),
     [needsSetup, setNeedsSetup] = useState(false);
@@ -75,16 +83,28 @@ export default function ExpenseApp() {
     [currency, setCurrency] = useState("EUR"),
     [mobile, setMobile] = useState(false),
     [toast, setToast] = useState("");
+  const sidebar = useRef<HTMLElement>(null);
+  useDialogFocus(sidebar, () => setMobile(false), mobile);
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 781px)");
+    const closeOnDesktop = () => {
+      if (desktop.matches) setMobile(false);
+    };
+    desktop.addEventListener("change", closeOnDesktop);
+    return () => desktop.removeEventListener("change", closeOnDesktop);
+  }, []);
   const refresh = () => setRevision((value) => value + 1),
     navigate = (path: string) => {
       setMobile(false);
       const target = new URL(path, window.location.origin);
-      if (["/", "/transactions"].includes(target.pathname)) {
+      if (["/", "/six-month", "/transactions"].includes(target.pathname)) {
         if (!target.searchParams.has("month"))
           target.searchParams.set("month", month);
         if (!target.searchParams.has("currency"))
           target.searchParams.set("currency", currency);
       }
+      if (target.pathname === "/" && !target.searchParams.has("months"))
+        target.searchParams.set("months", String(periodMonths));
       router.push(`${target.pathname}${target.search}`);
     };
   useEffect(() => {
@@ -96,6 +116,7 @@ export default function ExpenseApp() {
       })
       .catch(() => setChecking(false));
     const fn = () => {
+      setMobile(false);
       setAuthenticated(false);
       router.replace("/login");
     };
@@ -105,6 +126,16 @@ export default function ExpenseApp() {
   useEffect(() => {
     const saved = window.localStorage.getItem("expenses_currency");
     if (saved && /^[A-Z]{3}$/.test(saved)) setCurrency(saved);
+    const period = Number(
+      window.localStorage.getItem("expenses_period_months"),
+    );
+    if (
+      !search.has("months") &&
+      Number.isInteger(period) &&
+      period >= 1 &&
+      period <= 12
+    )
+      setPeriodMonths(period);
   }, []);
   useEffect(() => {
     window.localStorage.setItem("expenses_currency", currency);
@@ -114,6 +145,16 @@ export default function ExpenseApp() {
       setMonth(search.get("month")!);
     if (search.get("currency") && /^[A-Z]{3}$/.test(search.get("currency")!))
       setCurrency(search.get("currency")!);
+    const period = Number(search.get("months"));
+    if (
+      search.has("months") &&
+      Number.isInteger(period) &&
+      period >= 1 &&
+      period <= 12
+    ) {
+      setPeriodMonths(period);
+      window.localStorage.setItem("expenses_period_months", String(period));
+    }
   }, [search]);
   useEffect(() => {
     if (!toast) return;
@@ -158,7 +199,7 @@ export default function ExpenseApp() {
     );
   function selectMonth(value: string) {
     setMonth(value);
-    updateQuery({ month: value }, true);
+    updateQuery({ month: value, from: "", to: "" }, true);
   }
   function selectCurrency(value: string) {
     setCurrency(value);
@@ -197,7 +238,15 @@ export default function ExpenseApp() {
           onClick={() => setMobile(false)}
         />
       )}
-      <aside className={`sidebar ${mobile ? "open" : ""}`}>
+      <aside
+        ref={sidebar}
+        id="application-navigation"
+        className={`sidebar ${mobile ? "open" : ""}`}
+        role={mobile ? "dialog" : undefined}
+        aria-modal={mobile || undefined}
+        aria-label="Navigation"
+        tabIndex={-1}
+      >
         <Brand />
         <button
           className="sidebar-close icon-button"
@@ -207,10 +256,19 @@ export default function ExpenseApp() {
           <X />
         </button>
         <nav>
-          {navigation.map((item, i) => (
+          {navigation.map((item) => (
             <button
               key={item.path}
-              className={`nav-item ${(item.path === "/" ? active === "overview" : pathname.startsWith(item.path)) ? "active" : ""} ${i === 4 ? "nav-separated" : ""}`}
+              className={`nav-item ${(item.path === "/" ? active === "overview" : pathname.startsWith(item.path)) ? "active" : ""} ${item.path === "/connections" ? "nav-separated" : ""}`}
+              aria-current={
+                (
+                  item.path === "/"
+                    ? active === "overview"
+                    : pathname.startsWith(item.path)
+                )
+                  ? "page"
+                  : undefined
+              }
               onClick={() => navigate(item.path)}
             >
               <item.icon size={19} />
@@ -232,6 +290,7 @@ export default function ExpenseApp() {
               aria-label="Sign out"
               onClick={async () => {
                 await api("auth/logout", {});
+                setMobile(false);
                 setAuthenticated(false);
                 router.push("/login");
               }}
@@ -241,13 +300,15 @@ export default function ExpenseApp() {
           </div>
         </div>
       </aside>
-      <div className="main-wrap">
+      <div className="main-wrap" inert={mobile}>
         <main>
           <div className="page-heading">
             <div className="page-title">
               <button
                 className="mobile-menu icon-button"
                 aria-label="Open navigation"
+                aria-expanded={mobile}
+                aria-controls="application-navigation"
                 onClick={() => setMobile(true)}
               >
                 <Menu size={21} />
@@ -263,6 +324,32 @@ export default function ExpenseApp() {
             {path.length <= 1 &&
               ["overview", "transactions"].includes(active) && (
                 <div className="page-controls">
+                  {active === "overview" && (
+                    <select
+                      aria-label="Period length"
+                      value={periodMonths}
+                      onChange={(e) => {
+                        setPeriodMonths(Number(e.target.value));
+                        window.localStorage.setItem(
+                          "expenses_period_months",
+                          e.target.value,
+                        );
+                        updateQuery({ months: e.target.value });
+                      }}
+                    >
+                      {Array.from({ length: 12 }, (_, i) => i + 1).map(
+                        (count) => (
+                          <option key={count} value={count}>
+                            {count === 1
+                              ? "1 month"
+                              : count === 12
+                                ? "1 year"
+                                : `${count} months`}
+                          </option>
+                        ),
+                      )}
+                    </select>
+                  )}
                   <select
                     aria-label="Currency"
                     className="currency-select"
@@ -285,7 +372,9 @@ export default function ExpenseApp() {
                       </button>
                       <ISODateInput
                         precision="month"
-                        aria-label="Month"
+                        aria-label={
+                          active === "overview" ? "Period ending" : "Month"
+                        }
                         value={month}
                         onChange={(e) =>
                           e.target.value && selectMonth(e.target.value)
@@ -303,7 +392,20 @@ export default function ExpenseApp() {
               )}
           </div>
           <ErrorMessage message={state.error} />
-          {active === "overview" && <OverviewView context={context} />}
+          {active === "overview" && (
+            <div className="view-stack">
+              <PeriodOverview
+                key={`${month}-${currency}-${periodMonths}`}
+                context={context}
+                months={periodMonths}
+              />
+              <OverviewDetails
+                key={`details-${month}-${currency}-${periodMonths}`}
+                context={context}
+                months={periodMonths}
+              />
+            </div>
+          )}
           {active === "transactions" &&
             (path[1] ? (
               <TransactionDetailView context={context} id={path[1]} />
@@ -322,6 +424,49 @@ export default function ExpenseApp() {
           {active === "settings" && <SettingsView context={context} />}
         </main>
       </div>
+      <nav
+        className={`mobile-nav ${mobile ? "drawer-open" : ""}`}
+        aria-label="Mobile navigation"
+        aria-hidden={mobile || undefined}
+      >
+        {navigation.slice(0, 4).map((item) => {
+          const selected =
+            item.path === "/"
+              ? active === "overview"
+              : pathname.startsWith(item.path);
+          return (
+            <button
+              key={item.path}
+              className={selected ? "active" : ""}
+              aria-current={selected ? "page" : undefined}
+              onClick={() => navigate(item.path)}
+            >
+              <span className="mobile-nav-icon">
+                <item.icon size={21} />
+                {item.path === "/review" && reviewCount > 0 && (
+                  <span className="mobile-nav-badge" aria-hidden="true">
+                    {reviewCount > 99 ? "99+" : reviewCount}
+                  </span>
+                )}
+              </span>
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+        <button
+          className={
+            ["connections", "rules", "settings"].includes(active)
+              ? "active"
+              : ""
+          }
+          aria-expanded={mobile}
+          aria-controls="application-navigation"
+          onClick={() => setMobile(true)}
+        >
+          <Menu size={21} />
+          <span>More</span>
+        </button>
+      </nav>
       {toast && (
         <div className="toast" role="status">
           <CheckCheck size={18} />
@@ -449,17 +594,9 @@ function AuthScreen({ setup, onDone }: { setup: boolean; onDone: () => void }) {
     </div>
   );
 }
-type Contributions = {
-  contributed: number;
-  withdrawn: number;
-  net: number;
-  history_contributed: number;
-  history_withdrawn: number;
-  history_net: number;
-};
 type Summary = {
-  investment: Contributions;
-  pension: Contributions;
+  from: string;
+  to: string;
   spending: number;
   gross_spending: number;
   refunds: number;
@@ -490,9 +627,15 @@ type Summary = {
   pending: { count: number; amount: number };
   cash: { amount: number };
 };
-function OverviewView({ context: ctx }: { context: AppContext }) {
+function OverviewDetails({
+  context: ctx,
+  months,
+}: {
+  context: AppContext;
+  months: number;
+}) {
   const { data, error, loading } = useData<Summary>(
-    `overview?month=${ctx.month}&currency=${ctx.currency}`,
+    `overview?month=${ctx.month}&currency=${ctx.currency}&months=${months}`,
     ctx.revision,
     30000,
   );
@@ -507,34 +650,12 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
     coverage = data.receipt_required_count
       ? Math.round((data.receipt_count / data.receipt_required_count) * 100)
       : 0;
-  const positive = data.categories.filter((c) => c.amount > 0),
-    categoryTotal = positive.reduce((sum, c) => sum + c.amount, 0);
-  let start = 0;
-  const segments = positive.map((category) => {
-    const span = (category.amount / categoryTotal) * 100,
-      segment = { ...category, start, span };
-    start += span;
-    return segment;
-  });
-  const previous = data.trend.at(-2)?.spending || 0,
-    difference = data.spending - previous;
-  const contributionKinds = [
-    {
-      kind: "investment",
-      label: "INVESTMENT TRANSFERS",
-      totals: data.investment,
-    },
-    { kind: "pension", label: "PENSION CONTRIBUTIONS", totals: data.pension },
-  ].filter(
-    ({ totals }) =>
-      totals.contributed ||
-      totals.withdrawn ||
-      totals.history_contributed ||
-      totals.history_withdrawn,
-  );
-  const contributionMonths = data.trend.filter(
-    (point) => point.investment || point.pension,
-  );
+  const periodEnd = new Date(
+    new Date(`${data.to}T12:00:00Z`).getTime() - 86400000,
+  )
+    .toISOString()
+    .slice(0, 10);
+  const periodTransactions = `/transactions?from=${data.from}&to=${periodEnd}&currency=${ctx.currency}`;
   return (
     <div className="view-stack">
       <ErrorMessage message={error} />
@@ -556,52 +677,7 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
           </button>
         </div>
       )}
-      <div className="metric-grid">
-        <div className="metric featured">
-          <div className="metric-label">
-            NET SPENDING
-            <span>
-              <ArrowUpRight size={16} />
-            </span>
-          </div>
-          <div className="metric-value">{fmt(data.spending)}</div>
-          <div className="metric-caption">
-            {data.refunds
-              ? `${fmt(data.refunds)} in refunds included`
-              : previous
-                ? `${difference <= 0 ? "Down" : "Up"} ${fmt(Math.abs(difference))} from last month`
-                : "Booked expenses this month"}
-          </div>
-          <div className="metric-decoration" />
-        </div>
-        <div className="metric">
-          <div className="metric-label">
-            INCOME
-            <span>
-              <ArrowDownLeft size={16} />
-            </span>
-          </div>
-          <div className="metric-value">{fmt(data.income)}</div>
-          <div className="metric-caption">
-            Incoming payments, excluding transfers
-          </div>
-        </div>
-        <div className="metric">
-          <div className="metric-label">
-            NET CASH FLOW
-            <span>
-              <WalletCards size={16} />
-            </span>
-          </div>
-          <div
-            className={`metric-value ${data.net_cash_flow < 0 ? "negative" : ""}`}
-          >
-            {fmt(data.net_cash_flow)}
-          </div>
-          <div className="metric-caption">
-            After spending, refunds and contributions
-          </div>
-        </div>
+      <div className="overview-grid lower">
         <div className="metric">
           <div className="metric-label">
             RECEIPT COVERAGE
@@ -631,245 +707,6 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
             <i style={{ width: `${coverage}%` }} />
           </div>
         </div>
-      </div>
-      {contributionKinds.length > 0 && (
-        <section className="panel contributions-panel">
-          <SectionTitle title="Investments and pensions" />
-          <div className="metric-grid contribution-grid">
-            {contributionKinds.map(({ kind, label, totals }) => (
-              <div className="metric" key={kind}>
-                <div className="metric-label">
-                  {label}
-                  <span>
-                    <Landmark size={16} />
-                  </span>
-                </div>
-                <div className="metric-value">{fmt(totals.contributed)}</div>
-                <div className="metric-caption">Contributed this month</div>
-                {totals.withdrawn !== 0 && (
-                  <p className="form-help">
-                    {fmt(totals.withdrawn)} returned · {fmt(totals.net)} net
-                  </p>
-                )}
-                <p className="form-help">
-                  {fmt(totals.history_contributed)} contributed in imported
-                  history through this month
-                  {totals.history_withdrawn !== 0
-                    ? ` · ${fmt(totals.history_withdrawn)} returned · ${fmt(totals.history_net)} net`
-                    : ""}
-                </p>
-                <TextLink
-                  onClick={() =>
-                    ctx.navigate(
-                      `/transactions?kind=${kind}&month=${ctx.month}&currency=${ctx.currency}`,
-                    )
-                  }
-                >
-                  View transfers
-                </TextLink>
-              </div>
-            ))}
-          </div>
-          {contributionMonths.length > 0 && (
-            <div className="table-scroll">
-              <table className="contribution-table">
-                <thead>
-                  <tr>
-                    <th>Month</th>
-                    <th>Investments, net</th>
-                    <th>Pension, net</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {contributionMonths.map((point) => (
-                    <tr key={point.month}>
-                      <td>
-                        <button
-                          className="text-link"
-                          onClick={() => ctx.setMonth(point.month)}
-                        >
-                          {point.month}
-                        </button>
-                      </td>
-                      <td>{fmt(point.investment)}</td>
-                      <td>{fmt(point.pension)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      )}
-      <div className="overview-grid">
-        <section className="panel category-panel">
-          <SectionTitle
-            title="Spending by category"
-            action={
-              <TextLink onClick={() => ctx.navigate("/transactions")}>
-                View transactions
-              </TextLink>
-            }
-          />
-          {categoryTotal ? (
-            <>
-              <div className="donut-wrap">
-                <svg
-                  viewBox="0 0 200 200"
-                  role="img"
-                  aria-label="Spending by category"
-                >
-                  <circle
-                    cx="100"
-                    cy="100"
-                    r="76"
-                    fill="none"
-                    stroke="#ecefea"
-                    strokeWidth="22"
-                  />
-                  {segments.map((segment) => (
-                    <circle
-                      key={segment.id}
-                      cx="100"
-                      cy="100"
-                      r="76"
-                      fill="none"
-                      stroke={segment.color}
-                      strokeWidth="22"
-                      pathLength="100"
-                      strokeDasharray={`${Math.max(0, segment.span - 0.8)} ${100 - Math.max(0, segment.span - 0.8)}`}
-                      strokeDashoffset={-segment.start}
-                      transform="rotate(-90 100 100)"
-                    />
-                  ))}
-                </svg>
-                <div className="donut-center">
-                  <span>THIS MONTH</span>
-                  <strong>{fmt(data.spending)}</strong>
-                  <small>{data.transactions} transactions</small>
-                </div>
-              </div>
-              <div className="category-legend">
-                {data.categories.map((category) => (
-                  <button
-                    key={category.id}
-                    onClick={() =>
-                      ctx.navigate(`/transactions?category=${category.id}`)
-                    }
-                  >
-                    <span>
-                      <i style={{ background: category.color }} />
-                      {category.name}
-                    </span>
-                    <strong>{fmt(category.amount)}</strong>
-                  </button>
-                ))}
-              </div>
-            </>
-          ) : (
-            <Empty
-              title="No spending this month"
-              text="Import transactions or add a cash expense to see spending by category."
-            />
-          )}
-        </section>
-        <section className="panel trend-panel">
-          <SectionTitle
-            title="Spending and income"
-            description="Last six months"
-            action={<Badge>{ctx.currency}</Badge>}
-          />
-          {data.trend.some((point) => point.spending || point.income) ? (
-            <div className="trend-chart">
-              {data.trend.map((point) => {
-                const max = Math.max(
-                  ...data.trend.map((p) =>
-                    Math.max(Math.abs(p.spending), Math.abs(p.income)),
-                  ),
-                  1,
-                );
-                return (
-                  <button
-                    key={point.month}
-                    className={`trend-column ${point.month === ctx.month ? "selected" : ""}`}
-                    onClick={() => ctx.setMonth(point.month)}
-                  >
-                    <strong>{fmt(point.spending)}</strong>
-                    <div className="bar-space">
-                      <i
-                        style={{
-                          height: `${Math.max(2, (Math.abs(point.spending) / max) * 150)}px`,
-                        }}
-                      />
-                      <i
-                        className="income-bar"
-                        style={{
-                          height: `${Math.max(2, (Math.abs(point.income) / max) * 150)}px`,
-                        }}
-                      />
-                    </div>
-                    <span>{point.month}</span>
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            <Empty
-              title="No transactions in the last six months"
-              text="Connect a bank or add a cash entry to see monthly totals."
-            />
-          )}
-          <div className="chart-key">
-            <span>
-              <i />
-              Spending
-            </span>
-            <span>
-              <i className="income-key" />
-              Income
-            </span>
-          </div>
-          <div className="insight-strip">
-            <p>
-              {data.uncategorized.count
-                ? `${data.uncategorized.count} payments still need a category. They’re included in your spending total.`
-                : "Transfers are excluded from spending. Each currency has its own overview."}
-            </p>
-          </div>
-        </section>
-      </div>
-      <div className="overview-grid lower">
-        <section className="panel">
-          <SectionTitle title="Top merchants" />
-          {data.merchants.length ? (
-            <div className="merchant-list">
-              {data.merchants.map((merchant, i) => (
-                <button
-                  key={merchant.merchant}
-                  onClick={() =>
-                    ctx.navigate(
-                      `/transactions?search=${encodeURIComponent(merchant.merchant)}`,
-                    )
-                  }
-                >
-                  <span className="merchant-rank">
-                    {String(i + 1).padStart(2, "0")}
-                  </span>
-                  <div>
-                    <strong>{merchant.merchant}</strong>
-                    <small>{merchant.count} payments</small>
-                  </div>
-                  <strong>{fmt(merchant.amount)}</strong>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <Empty
-              title="No payments this month"
-              text="Try another month or connect your first bank account."
-            />
-          )}
-        </section>
         <section className="panel attention-panel">
           <SectionTitle title="Needs review" />
           <div className="attention-list">
@@ -920,7 +757,7 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
         <SectionTitle
           title="Recent transactions"
           action={
-            <TextLink onClick={() => ctx.navigate("/transactions")}>
+            <TextLink onClick={() => ctx.navigate(periodTransactions)}>
               All transactions
             </TextLink>
           }
@@ -929,7 +766,7 @@ function OverviewView({ context: ctx }: { context: AppContext }) {
           <EntryTable entries={data.recent} navigate={ctx.navigate} />
         ) : (
           <Empty
-            title="No transactions this month"
+            title="No transactions in this period"
             text="Connect a bank or record a cash expense to get started."
           >
             <button

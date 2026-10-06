@@ -9,6 +9,7 @@ import { parseMoney, validDate } from "../lib/money";
 import { transactionKind, normalize } from "../lib/classification";
 import { applyAllocations, autoMatchReceipt, linkReceipt } from "./ledger";
 import { enqueue } from "./queue";
+import { importStartDate, lockImportWindow } from "./import-window";
 
 export async function bankingRequest<T = Record<string, unknown>>(
   endpoint: string,
@@ -229,7 +230,10 @@ export async function importBankTransactions(
   accountId: string,
   records: BankTransaction[],
   db: DB = pool,
-) {
+): Promise<number> {
+  if (db === pool)
+    return transaction((tx) => importBankTransactions(accountId, records, tx));
+  const startDate = await lockImportWindow(db);
   const ownIbans = new Set(
     (
       await query(
@@ -267,6 +271,7 @@ export async function importBankTransactions(
         502,
       );
     const bookedAt = sourceDate ? validDate(sourceDate.slice(0, 10)) : null;
+    if (bookedAt && bookedAt < startDate) continue;
     const counterparty =
       (raw.credit_debit_indicator === "DBIT"
         ? raw.creditor_account?.iban
@@ -533,6 +538,7 @@ export async function syncBank(
       [connectionId],
       db,
     );
+    const startDate = await importStartDate(db);
     let count = 0;
     for (const account of accounts) {
       const base = new URLSearchParams(
@@ -548,8 +554,10 @@ export async function syncBank(
               }).format(new Date()),
               strategy: "default",
             }
-          : { strategy: "longest" },
+          : { strategy: "default" },
       );
+      if (!base.get("date_from") || base.get("date_from")! < startDate)
+        base.set("date_from", startDate);
       let cursor: string | null = null,
         pages = 0;
       const records: BankTransaction[] = [];
@@ -594,6 +602,7 @@ export async function syncBank(
           await new Promise((resolve) => setTimeout(resolve, 300));
       } while (cursor);
       await transaction(async (tx) => {
+        const currentStart = await lockImportWindow(tx);
         if (sebPendingSnapshot) {
           // The complete SEB pending snapshot also replaces old reference-less
           // copies that have disappeared or booked since the previous import.
@@ -618,7 +627,9 @@ export async function syncBank(
         count += await importBankTransactions(account.id, records, tx);
         const dates = records
           .map((t) => t.booking_date || t.transaction_date || t.value_date)
-          .filter(Boolean)
+          .filter((date): date is string =>
+            Boolean(date && date.slice(0, 10) >= currentStart),
+          )
           .sort();
         await tx.query(
           `UPDATE accounts SET last_sync_at=now(),history_from=LEAST(history_from,$2::date),history_to=GREATEST(history_to,$3::date) WHERE id=$1`,

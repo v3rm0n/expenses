@@ -44,7 +44,7 @@ const {
 } = await import("../src/server/banking");
 const { storeReceipt, processReceipt, extractDocument } =
   await import("../src/server/receipts");
-const { overview, receiptDetail, receiptPage, receiptList } =
+const { overview, spendingAnalysis, receiptDetail, receiptPage, receiptList } =
   await import("../src/server/reporting");
 const { receiveEmail, processEmail, readEmailMessage } =
   await import("../src/server/email");
@@ -54,6 +54,8 @@ const { getQueue } = await import("../src/server/queue");
 const { writeBackup, restoreBackup } = await import("./archive");
 const { config } = await import("../src/server/config");
 const { encrypt, digest } = await import("../src/server/crypto");
+const { importStartDate, saveImportStartDate, removeReceipts } =
+  await import("../src/server/import-window");
 let checks = 0;
 const check = (message: string, fn: () => Promise<void>) =>
   fn().then(() => {
@@ -62,6 +64,236 @@ const check = (message: string, fn: () => Promise<void>) =>
   });
 try {
   await migrate();
+  await check(
+    "merchant aliases group history and future imports, preserve originals, and allow reversible edits",
+    async () => {
+      const { merchantGroups, saveMerchantGroup, deleteMerchantGroup } =
+        await import("../src/server/merchants");
+      const { transactionList } = await import("../src/server/reporting");
+      const [account] = await query(
+        "INSERT INTO accounts(identification_hash,name,currency) VALUES('merchant-alias-test','Merchant alias test','EUR') RETURNING id",
+      );
+      let groupId: string | undefined;
+      try {
+        const [defaults] = await query(
+          "SELECT merchant_name(' WOLT ') AS wolt,merchant_name('Wolt Eesti Oue') AS legal,merchant_name('Balti Jaama Selver') AS selver",
+        );
+        assert.deepEqual(defaults, {
+          wolt: "Wolt",
+          legal: "Wolt",
+          selver: "Selver",
+        });
+        const add = async (key: string, merchant: string, amount: number) => {
+          const [entry] = await query(
+            "INSERT INTO transactions(account_id,source_key,amount,kind,status,booked_at,merchant,currency) VALUES($1,$2,$3,$4,'BOOK','2038-01-15',$5,'EUR') RETURNING id",
+            [
+              account.id,
+              key,
+              amount,
+              amount > 0 ? "refund" : "expense",
+              merchant,
+            ],
+          );
+          await query(
+            "INSERT INTO allocations VALUES($1,'groceries',$2,'manual')",
+            [entry.id, -amount],
+          );
+        };
+        await add("alias-first", "Test Branch One", -1000);
+        await add("alias-second", "Test Branch Two", -2000);
+        const group = await saveMerchantGroup({
+          name: "Test Company",
+          aliases: [
+            "Test Branch One",
+            "Test Branch Two",
+            " TEST   BRANCH ONE ",
+          ],
+        });
+        groupId = group.id;
+        await add("alias-future", "TEST  BRANCH TWO", -500);
+        await add("alias-refund", "Test Branch One", 200);
+        await add("alias-unrelated", "Test Branch Three", -100);
+        const report = await overview("2038-01", "EUR");
+        assert.deepEqual(
+          report.merchants.find((row) => row.merchant === "Test Company"),
+          { merchant: "Test Company", amount: 3300, count: 4 },
+        );
+        const analysis = await spendingAnalysis("2038-01", "EUR", 1);
+        assert.equal(
+          analysis.merchants.find((row) => row.merchant === "Test Company")
+            ?.amount,
+          3300,
+        );
+        const filtered = await transactionList(
+          new URLSearchParams({ search: "Test Company", account: account.id }),
+        );
+        assert.equal(filtered.count, 4);
+        assert.ok(
+          filtered.rows.every(
+            (row) =>
+              row.merchant_group === "Test Company" &&
+              row.merchant !== "Test Company",
+          ),
+        );
+        const originalSearch = await transactionList(
+          new URLSearchParams({ search: "Branch One", account: account.id }),
+        );
+        assert.equal(originalSearch.count, 2);
+        await assert.rejects(
+          saveMerchantGroup({
+            name: "Other Company",
+            aliases: [" test branch one "],
+          }),
+          /already belongs/,
+        );
+        await assert.rejects(
+          saveMerchantGroup({ name: "TEST COMPANY", aliases: [] }),
+          /already belongs/,
+        );
+        await assert.rejects(
+          saveMerchantGroup({
+            id: "00000000-0000-0000-0000-000000000000",
+            name: "Missing",
+            aliases: [],
+          }),
+          /not found/,
+        );
+        await saveMerchantGroup({
+          id: group.id,
+          name: "Renamed Company",
+          aliases: ["Test Branch One"],
+        });
+        const renamed = await transactionList(
+          new URLSearchParams({
+            search: "Renamed Company",
+            account: account.id,
+          }),
+        );
+        assert.equal(renamed.count, 2);
+        const [removedAlias] = await query(
+          "SELECT merchant_name('Test Branch Two') AS name",
+        );
+        assert.equal(removedAlias.name, "Test Branch Two");
+        const groups = await merchantGroups();
+        assert.ok(groups.names.some((row) => row.name === "TEST  BRANCH TWO"));
+        await deleteMerchantGroup(group.id);
+        groupId = undefined;
+        const [original] = await query(
+          "SELECT merchant_name('Test Branch One') AS name",
+        );
+        assert.equal(original.name, "Test Branch One");
+        const [normalization] = await query(
+          "SELECT merchant_key(' ＷＯＬＴ  ') AS name",
+        );
+        assert.equal(normalization.name, "wolt");
+      } finally {
+        if (groupId) await deleteMerchantGroup(groupId);
+        await query("DELETE FROM transactions WHERE account_id=$1", [
+          account.id,
+        ]);
+        await query("DELETE FROM accounts WHERE id=$1", [account.id]);
+      }
+    },
+  );
+  await check(
+    "six-month reports reconcile split allocations, refunds and contributions across year boundaries",
+    async () => {
+      const [account] = await query(
+        "INSERT INTO accounts(identification_hash,name,currency) VALUES('analysis-test','Analysis test','KWD') RETURNING id",
+      );
+      try {
+        const entries = [
+          [-1000, "expense", "BOOK", "2035-11-01", "Market", "KWD"],
+          [200, "refund", "BOOK", "2035-12-15", "Market", "KWD"],
+          [900, "refund", "BOOK", "2036-04-30", "Shop", "KWD"],
+          [10000, "income", "BOOK", "2036-01-01", "Salary", "KWD"],
+          [-3000, "investment", "BOOK", "2036-01-01", "Investments", "KWD"],
+          [-1000, "pension", "BOOK", "2036-01-01", "Pension", "KWD"],
+          [-500, "transfer", "BOOK", "2036-01-01", "Transfer", "KWD"],
+          [
+            -500,
+            "cash_movement",
+            "BOOK",
+            "2036-01-01",
+            "Cash withdrawal",
+            "KWD",
+          ],
+          [-500, "expense", "PDNG", "2036-01-01", "Pending", "KWD"],
+          [-500, "expense", "SUPERSEDED", "2036-01-01", "Superseded", "KWD"],
+          [-500, "expense", "BOOK", "2036-01-01", "Other currency", "EUR"],
+          [-500, "expense", "BOOK", "2035-10-31", "Before window", "KWD"],
+          [-500, "expense", "BOOK", "2036-05-01", "After window", "KWD"],
+        ];
+        for (const [index, entry] of entries.entries()) {
+          const [row] = await query(
+            "INSERT INTO transactions(account_id,source_key,amount,kind,status,booked_at,merchant,currency) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
+            [account.id, `analysis-${index}`, ...entry],
+          );
+          if (index === 0) {
+            await query(
+              "INSERT INTO allocations VALUES($1,'groceries',600,'manual'),($1,'gifts',400,'manual')",
+              [row.id],
+            );
+          } else {
+            await query("INSERT INTO allocations VALUES($1,$2,$3,'manual')", [
+              row.id,
+              index === 2 ? "gifts" : "groceries",
+              -Number(entry[0]),
+            ]);
+          }
+        }
+        const report = await spendingAnalysis("2036-04", "KWD");
+        assert.equal(report.from, "2035-11-01");
+        assert.equal(report.to, "2036-05-01");
+        assert.deepEqual(
+          report.months.map((point) => point.month),
+          ["2035-11", "2035-12", "2036-01", "2036-02", "2036-03", "2036-04"],
+        );
+        assert.deepEqual(
+          report.months.map((point) => point.spending),
+          [1000, -200, 0, 0, 0, -900],
+        );
+        assert.equal(report.months[2].income, 10000);
+        assert.equal(report.months[2].investment, 3000);
+        assert.equal(report.months[2].pension, 1000);
+        for (const point of report.months) {
+          assert.equal(
+            report.categories
+              .filter((row) => row.month === point.month)
+              .reduce((sum, row) => sum + row.amount, 0),
+            point.spending,
+          );
+          assert.equal(
+            report.merchants
+              .filter((row) => row.month === point.month)
+              .reduce((sum, row) => sum + row.amount, 0),
+            point.spending,
+          );
+        }
+        assert.deepEqual(
+          [...new Set(report.merchants.map((row) => row.merchant))].sort(),
+          ["Market", "Shop"],
+        );
+        assert.equal(
+          report.categories.find(
+            (row) => row.month === "2035-11" && row.id === "groceries",
+          )?.amount,
+          600,
+        );
+        assert.equal(
+          report.categories.find(
+            (row) => row.month === "2035-11" && row.id === "gifts",
+          )?.amount,
+          400,
+        );
+      } finally {
+        await query("DELETE FROM transactions WHERE account_id=$1", [
+          account.id,
+        ]);
+        await query("DELETE FROM accounts WHERE id=$1", [account.id]);
+      }
+    },
+  );
   await check(
     "account nicknames are used in transactions and receipt payment links and candidates",
     async () => {
@@ -2411,7 +2643,7 @@ KUUPÄEV: 02.10.2026`;
         linked = pending("TEST LINKED PENDING", "5.10"),
         historical = {
           ...pending("TEST OLDER PENDING", "1.23"),
-          booking_date: "2024-10-02",
+          booking_date: "2026-01-02",
         },
         booked = {
           ...bank("snapshot-revolut-booked", "10.00", "Revolut**6902*"),
@@ -2580,8 +2812,10 @@ KUUPÄEV: 02.10.2026`;
         );
         const first = calls[0].searchParams,
           second = calls[1].searchParams;
-        assert.equal(first.get("strategy"), "longest");
-        assert.equal(second.get("strategy"), "longest");
+        assert.equal(first.get("strategy"), "default");
+        assert.equal(first.get("date_from"), "2026-01-01");
+        assert.equal(second.get("strategy"), "default");
+        assert.equal(second.get("date_from"), "2026-01-01");
         const [checkpoint] = await query(
           "SELECT last_sync_at FROM accounts WHERE id=$1",
           [account.id],
@@ -2812,6 +3046,181 @@ KUUPÄEV: 02.10.2026`;
           "DELETE FROM receipts WHERE file_hash LIKE 'pagination-regression-%'",
         );
       }
+    },
+  );
+  await check(
+    "import start date prunes old records, includes the boundary and can be moved earlier",
+    async () => {
+      assert.equal(await importStartDate(), "2026-01-01");
+      await saveImportStartDate("2025-01-01");
+      const [account] = await query(
+        "INSERT INTO accounts(identification_hash,name,currency,source) VALUES('cutoff-test','Cutoff test','EUR','bank') RETURNING id",
+      );
+      const record = (
+        id: string,
+        date?: string,
+        status = "BOOK",
+      ): BankTransaction => ({
+        entry_reference: id,
+        status,
+        booking_date: date,
+        transaction_amount: { amount: "5.10", currency: "EUR" },
+        credit_debit_indicator: "DBIT",
+        creditor: { name: "Cutoff test" },
+      });
+      const records = [
+        record("older", "2025-12-31"),
+        record("boundary", "2026-01-01"),
+        record("undated", undefined, "PDNG"),
+      ];
+      assert.equal(await importBankTransactions(account.id, records), 3);
+      const older = await storeReceipt(
+        Buffer.from(receiptText("Rimi", "CUTOFF-OLD", "31.12.2025")),
+        "cutoff-old.txt",
+      );
+      const boundary = await storeReceipt(
+        Buffer.from(receiptText("Rimi", "CUTOFF-NEW", "01.01.2026")),
+        "cutoff-new.txt",
+      );
+      const unknown = await storeReceipt(
+        Buffer.from("Unknown receipt without a date"),
+        "cutoff-unknown.txt",
+      );
+      for (const item of [older, boundary, unknown])
+        await processReceipt(item.id);
+      const [oldPayment] = await query(
+        "SELECT id FROM transactions WHERE account_id=$1 AND source_key='ref:older'",
+        [account.id],
+      );
+      const [newPayment] = await query(
+        "SELECT id FROM transactions WHERE account_id=$1 AND source_key='ref:boundary'",
+        [account.id],
+      );
+      await transaction(async (db) => {
+        await linkReceipt(older.id, newPayment.id, 510, false, db);
+        await linkReceipt(boundary.id, oldPayment.id, 510, false, db);
+      });
+      const [duplicate] = await query(
+        "INSERT INTO receipts(file_hash,filename,content_type,storage_path,status,duplicate_of) VALUES('cutoff-duplicate','duplicate.txt','text/plain','unused','duplicate',$1) RETURNING id",
+        [older.id],
+      );
+      await query(
+        "INSERT INTO retailer_receipts VALUES('lidl','cutoff-account','cutoff-old',$1,now())",
+        [older.id],
+      );
+      const [email] = await query(
+        "INSERT INTO inbound_emails(source_key,storage_path,status,receipt_ids) VALUES('cutoff-email','unused','complete',$1) RETURNING id",
+        [JSON.stringify([older.id, boundary.id])],
+      );
+      await query(
+        "INSERT INTO corrections(entity,entity_id,change) VALUES('receipt',$1,'{}'),('transaction',$2,'{}')",
+        [older.id, oldPayment.id],
+      );
+      const cleanup = await saveImportStartDate("2026-01-01");
+      assert.equal(cleanup.removedTransactions, 1);
+      assert.equal(cleanup.removedReceipts, 2);
+      assert.equal(
+        (
+          await query("SELECT id FROM receipts WHERE id=ANY($1::uuid[])", [
+            [older.id, duplicate.id],
+          ])
+        ).length,
+        0,
+      );
+      assert.equal(
+        (
+          await query(
+            "SELECT * FROM retailer_receipts WHERE account_key='cutoff-account'",
+          )
+        ).length,
+        0,
+      );
+      assert.equal(
+        (
+          await query(
+            "SELECT * FROM transaction_revisions WHERE transaction_id=$1",
+            [oldPayment.id],
+          )
+        ).length,
+        0,
+      );
+      assert.equal(
+        (
+          await query(
+            "SELECT * FROM corrections WHERE entity_id=ANY($1::text[])",
+            [[older.id, oldPayment.id]],
+          )
+        ).length,
+        0,
+      );
+      assert.deepEqual(
+        (
+          await query("SELECT receipt_ids FROM inbound_emails WHERE id=$1", [
+            email.id,
+          ])
+        )[0].receipt_ids,
+        [boundary.id],
+      );
+      assert.equal(
+        (
+          await query("SELECT status FROM receipts WHERE id=$1", [boundary.id])
+        )[0].status,
+        "ready",
+      );
+      assert.equal(
+        (
+          await query("SELECT id FROM transactions WHERE id=$1", [
+            newPayment.id,
+          ])
+        ).length,
+        1,
+      );
+      assert.equal(
+        (await query("SELECT id FROM receipts WHERE id=$1", [unknown.id]))
+          .length,
+        1,
+      );
+      assert.equal(await importBankTransactions(account.id, records), 0);
+      const skipped = await storeReceipt(
+        Buffer.from(receiptText("Rimi", "CUTOFF-OLD", "31.12.2025")),
+        "cutoff-repeat.txt",
+      );
+      await processReceipt(skipped.id);
+      assert.equal(
+        (await query("SELECT id FROM receipts WHERE id=$1", [skipped.id]))
+          .length,
+        0,
+      );
+      await assert.rejects(saveImportStartDate("2026-02-30"));
+      assert.equal(await importStartDate(), "2026-01-01");
+      await query("UPDATE accounts SET last_sync_at=now() WHERE id=$1", [
+        account.id,
+      ]);
+      await saveImportStartDate("2025-01-01");
+      assert.equal(
+        (
+          await query("SELECT last_sync_at FROM accounts WHERE id=$1", [
+            account.id,
+          ])
+        )[0].last_sync_at,
+        null,
+      );
+      assert.equal(await importBankTransactions(account.id, records), 1);
+      const restored = await storeReceipt(
+        Buffer.from(receiptText("Rimi", "CUTOFF-OLD", "31.12.2025")),
+        "cutoff-restored.txt",
+      );
+      await processReceipt(restored.id);
+      assert.equal(
+        (await query("SELECT id FROM receipts WHERE id=$1", [restored.id]))
+          .length,
+        1,
+      );
+      await saveImportStartDate("2026-01-01");
+      await transaction((db) => removeReceipts([boundary.id, unknown.id], db));
+      await query("DELETE FROM inbound_emails WHERE id=$1", [email.id]);
+      await query("DELETE FROM transactions WHERE account_id=$1", [account.id]);
+      await query("DELETE FROM accounts WHERE id=$1", [account.id]);
     },
   );
   await check(

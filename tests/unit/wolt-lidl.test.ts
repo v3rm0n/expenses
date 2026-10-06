@@ -25,6 +25,49 @@ describe("Wolt documents", () => {
       false,
     );
   });
+  it("deducts Wolt discount credits once and reconciles the invoice with the card payment", () => {
+    const text = woltReceiptText()
+      .replace("Apple Pay 6.00", "Apple Pay 25.83\nWolt discount credits 4.42")
+      .replace(
+        /Item VAT %[\s\S]*?Total in EUR \(incl\. VAT\) 6.00/,
+        `Item VAT % Quantity Gross unit price Price
+Pizza 1 14.90
+Pizza 1 24% 1 14.50 14.50
+Packaging 24% 1 0.40 0.40
+Pizza 2 15.35
+Pizza 2 24% 1 14.95 14.95
+Packaging 24% 1 0.40 0.40
+Total in EUR (incl. VAT) 30.25`,
+      );
+    const receipt = parseReceipt(text);
+    expect(receipt).toMatchObject({
+      valid: true,
+      total: 2583,
+      cardAmount: 2583,
+      issues: [],
+    });
+    expect(receipt.items.map((item) => item.amount)).toEqual([
+      1450, 40, 1495, 40, -442,
+    ]);
+    expect(receipt.items.at(-1)).toMatchObject({
+      amount: -442,
+      categoryId: "restaurants",
+    });
+    expect(receipt.items.reduce((sum, item) => sum + item.amount, 0)).toBe(
+      2583,
+    );
+    for (const credits of ["4.41", "unreadable", "-4.42"]) {
+      const invalid = parseReceipt(
+        text.replace(
+          "Wolt discount credits 4.42",
+          `Wolt discount credits ${credits}`,
+        ),
+      );
+      expect(invalid.valid).toBe(false);
+      expect(invalid.total).toBe(3025);
+      expect(invalid.items).toHaveLength(4);
+    }
+  });
   it("reads weighed groceries, preserves wrapped package sizes, and excludes deposits from voucher allocations", () => {
     const text = woltReceiptText()
       .replace("Venue Test Burger Kitchen", "Venue Wolt Market Test")

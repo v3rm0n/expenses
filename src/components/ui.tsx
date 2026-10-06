@@ -193,6 +193,7 @@ export type Entry = {
   account_name: string;
   source: string;
   merchant: string;
+  merchant_group?: string;
   description: string;
   amount: number;
   currency: string;
@@ -243,7 +244,9 @@ export type Receipt = {
   text: string;
 };
 export type ReceiptDetail = Receipt & {
+  suggested_categories: Category[];
   items: Array<{
+    id: string;
     description: string;
     quantity: string | null;
     unit: string | null;
@@ -322,13 +325,15 @@ export function EntryTable({
               <td>
                 <div className="entry-merchant">
                   {selection && ["expense", "refund"].includes(entry.kind) && (
-                    <input
-                      type="checkbox"
-                      aria-label={`Select transaction ${entry.merchant} ${shortDate(entry.booked_at)} ${money(entry.amount, entry.currency)}`}
-                      checked={selection.ids.includes(entry.id)}
-                      disabled={selection.disabled}
-                      onChange={() => selection.toggle(entry.id)}
-                    />
+                    <label className="entry-select">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select transaction ${entry.merchant} ${shortDate(entry.booked_at)} ${money(entry.amount, entry.currency)}`}
+                        checked={selection.ids.includes(entry.id)}
+                        disabled={selection.disabled}
+                        onChange={() => selection.toggle(entry.id)}
+                      />
+                    </label>
                   )}
                   <button
                     className="merchant-link"
@@ -339,10 +344,14 @@ export function EntryTable({
                     }
                   >
                     <span className="merchant-avatar">
-                      {initials(entry.merchant)}
+                      {initials(entry.merchant_group || entry.merchant)}
                     </span>
                     <span>
-                      <strong>{entry.merchant}</strong>
+                      <strong>{entry.merchant_group || entry.merchant}</strong>
+                      {entry.merchant_group &&
+                        entry.merchant_group !== entry.merchant && (
+                          <small>{entry.merchant}</small>
+                        )}
                       <small>
                         {entry.description ||
                           (entry.kind === "transfer"

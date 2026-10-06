@@ -35,7 +35,102 @@ E 0,00% 0,10 0,10 0,00
 KASSA: 0001 ARVE NR: TEST-1001
 KUUPÄEV: 02.10.2026 AEG: 12:00:00`;
 
+const birthdayReceipt = `Rimi
+KLIENT: TEST
+Rimi paberkott suur, Jõulud 0,27 A
+Vahukoor laktoosivaba 35%
+Tere 200ml
+2,000 tk. X 1,59 3,18 A
+Juust Mascarpone Formagia 500g
+2,000 tk. X 6,19 12,38 A
+Allah. -1,28 Uus hind 11,10
+Küpsis Kinder Cards 76,8g 2,75 A
+Küpsised Brownie Rimi 200g 2,75 A
+Õlu Saku On Ice 5%vol 0,331 1,39 A
+Klaaspudel korduszkasutatav 0,10 E
+Olu Kerge IPA Tanker 5,2% 0,51
+purk 1,79 A
+Metallist ühekorrapakend 0,10 E
+Õlu Piparkoogi Porter 6,5%vol 0,51 2,99 A
+Klaaspudel ühekordne 0,10 E
+SINU SOODUSTUSED:
+Kampaania -1,28
+Sünnipäeva soodustus -10% -0,62
+Oled säästnud 1,90
+KAARDIMAKSE
+SUMMA: 25,90 EUR
+Soodustus Sinu RIMI kaardiga 0,62
+KOKKU 25,90 EUR
+KAARDIMAKSE 25,90 EUR
+ARVE NR: BIRTHDAY-TEST
+KUUPÄEV: 22.12.2025`;
+
 describe("Rimi digital receipts", () => {
+  it("applies summary-only birthday savings to the drinks and keeps campaign savings and deposits once", () => {
+    const parsed = parseReceipt(birthdayReceipt);
+    expect(parsed).toMatchObject({
+      valid: true,
+      total: 2590,
+      cardAmount: 2590,
+      issues: [],
+    });
+    expect(parsed.items.map((item) => item.amount)).toEqual([
+      27, 318, 1110, 275, 275, 125, 10, 161, 10, 269, 10,
+    ]);
+    expect(
+      parsed.items
+        .filter((item) => item.categoryId === "alcohol")
+        .reduce((sum, item) => sum + item.amount, 0),
+    ).toBe(555);
+    expect(parsed.items.reduce((sum, item) => sum + item.amount, 0)).toBe(2590);
+  });
+  it("does not subtract birthday savings again when each product already includes its new price", () => {
+    const parsed = parseReceipt(
+      birthdayReceipt
+        .replace("1,39 A", "1,39 A\nAllah. -0,14 Uus hind 1,25")
+        .replace("1,79 A", "1,79 A\nAllah. -0,18 Uus hind 1,61")
+        .replace("2,99 A", "2,99 A\nAllah. -0,30 Uus hind 2,69"),
+    );
+    expect(parsed).toMatchObject({ valid: true, total: 2590, issues: [] });
+    expect(parsed.items.map((item) => item.amount)).toEqual(
+      parseReceipt(birthdayReceipt).items.map((item) => item.amount),
+    );
+  });
+  it.each(["-10% -0,63", "-10% ???", "-10% 0,62", "-150% -0,62"])(
+    "keeps unreadable or inconsistent birthday discounts in review: %s",
+    (summary) => {
+      const parsed = parseReceipt(
+        birthdayReceipt.replace("-10% -0,62", summary),
+      );
+      expect(parsed.valid).toBe(false);
+      expect(parsed.issues.join(" ")).toMatch(/birthday discount/);
+      expect(parsed.items[5].amount).toBe(139);
+    },
+  );
+  it("does not spread a birthday discount onto unrelated products to force reconciliation", () => {
+    const parsed = parseReceipt(
+      birthdayReceipt.replace("Olu Kerge IPA", "Unknown product"),
+    );
+    expect(parsed.valid).toBe(false);
+    expect(parsed.issues.join(" ")).toMatch(/birthday discount/);
+    expect(parsed.items[1].amount).toBe(318);
+    expect(parsed.items[2].amount).toBe(1110);
+  });
+  it("applies birthday savings before redeemed loyalty money", () => {
+    const parsed = parseReceipt(`Rimi
+KLIENT: TEST
+Õlu 2,00 A
+Piim 3,00 A
+Pant 0,10 E
+SINU SOODUSTUSED:
+Sünnipäeva soodustus -10% -0,20
+Kasutatud Sinu RIMI raha -1,00
+KOKKU 3,90 EUR
+KAARDIMAKSE 3,90 EUR
+02.10.2026`);
+    expect(parsed).toMatchObject({ valid: true, total: 390, issues: [] });
+    expect(parsed.items.map((item) => item.amount)).toEqual([142, 238, 10]);
+  });
   it("joins wrapped names, reads quantities and reconciles net product prices", () => {
     const parsed = parseReceipt(digitalReceipt);
     expect(parsed).toMatchObject({

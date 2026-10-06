@@ -128,7 +128,11 @@ export async function processEmail(id: string) {
       }
     }
     await query(
-      `UPDATE inbound_emails SET sender=$2,subject=$3,message_id=$4,receipt_ids=$5,status=$6,
+      `UPDATE inbound_emails SET sender=$2,subject=$3,message_id=$4,receipt_ids=(
+        SELECT coalesce(jsonb_agg(entry.value ORDER BY entry.position),'[]'::jsonb)
+        FROM jsonb_array_elements_text($5::jsonb) WITH ORDINALITY entry(value,position)
+        WHERE EXISTS(SELECT 1 FROM receipts r WHERE r.id::text=entry.value)
+      ),status=$6,
       error=$7,processed_at=now() WHERE id=$1`,
       [
         id,

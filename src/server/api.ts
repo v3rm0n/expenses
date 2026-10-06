@@ -1,3 +1,14 @@
+import {
+  merchantGroups,
+  saveMerchantGroup,
+  deleteMerchantGroup,
+} from "./merchants";
+import {
+  importStartDate,
+  saveImportStartDate,
+  requireImportDate,
+  lockImportWindow,
+} from "./import-window";
 import { NextRequest, NextResponse } from "next/server";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -11,6 +22,11 @@ import {
   type SimilarTransaction,
 } from "./similar-transactions";
 import { query, transaction, migrate } from "./db";
+import {
+  trialBalance,
+  transactionJournal,
+  setOpeningBalance,
+} from "./accounting";
 import {
   addSession,
   assertOrigin,
@@ -27,6 +43,7 @@ import { decrypt, equalSecret, hashPassword } from "./crypto";
 import {
   applicationState,
   overview,
+  spendingAnalysis,
   receiptDetail,
   receiptList,
   receiptPage,
@@ -43,6 +60,7 @@ import { enqueue } from "./queue";
 import { lidlStatus, saveLidl } from "./lidl";
 import {
   MAX_FILE_SIZE,
+  deleteReceipt,
   replaceReceiptItems,
   storageFile,
   storeReceipt,
@@ -172,6 +190,40 @@ export async function handleApi(
     }
     if (route === "state" && method === "GET")
       return json(await applicationState());
+    if (route === "accounting/trial-balance" && method === "GET")
+      return json(
+        await trialBalance(
+          currencyInput.parse(params.get("currency") || "EUR"),
+          params.has("through")
+            ? dateInput.parse(params.get("through"))
+            : undefined,
+        ),
+      );
+    if (
+      segments[0] === "accounting" &&
+      segments[1] === "transactions" &&
+      segments.length === 3 &&
+      method === "GET"
+    )
+      return json(await transactionJournal(uuid(segments[2])));
+    if (route === "accounting/opening-balance" && method === "POST") {
+      const input = z
+        .object({ accountId: z.uuid(), amount: moneyInput, date: dateInput })
+        .strict()
+        .parse(await request.json());
+      const [account] = await query(
+        "SELECT currency FROM ledger_accounts WHERE id=$1",
+        [input.accountId],
+      );
+      if (!account) throw new AppError("Accounting account not found.", 404);
+      return json(
+        await setOpeningBalance(
+          input.accountId,
+          parseMoney(input.amount, account.currency),
+          input.date,
+        ),
+      );
+    }
     if (
       segments[0] === "accounts" &&
       segments.length === 2 &&
@@ -188,7 +240,7 @@ export async function handleApi(
       if (!account) throw new AppError("Account not found.", 404);
       return json(account);
     }
-    if (route === "overview" && method === "GET") {
+    if (["overview", "spending-analysis"].includes(route) && method === "GET") {
       const month =
           params.get("month") ||
           new Intl.DateTimeFormat("sv-SE", {
@@ -197,7 +249,19 @@ export async function handleApi(
             month: "2-digit",
           }).format(new Date()),
         currency = currencyInput.parse(params.get("currency") || "EUR");
-      return json(await overview(month, currency));
+      return json(
+        await (route === "overview"
+          ? overview(
+              month,
+              currency,
+              params.has("months") ? Number(params.get("months")) : 1,
+            )
+          : spendingAnalysis(
+              month,
+              currency,
+              params.has("months") ? Number(params.get("months")) : 6,
+            )),
+      );
     }
     if (route === "transactions" && method === "GET")
       return json(await transactionList(params));
@@ -221,6 +285,7 @@ export async function handleApi(
       const magnitude = Math.abs(parseMoney(input.amount, input.currency));
       if (!magnitude) throw new AppError("Enter a nonzero amount.");
       const result = await transaction(async (db) => {
+        await requireImportDate(input.date, db);
         const [account] = await query(
           "INSERT INTO accounts(identification_hash,name,currency,source) VALUES($1,$2,$3,'cash') ON CONFLICT(identification_hash) DO UPDATE SET name=excluded.name RETURNING id",
           [
@@ -641,6 +706,8 @@ export async function handleApi(
     if (segments[0] === "receipts" && segments.length >= 2) {
       const id = uuid(segments[1]),
         action = segments[2];
+      if (!action && method === "DELETE")
+        return json({ ok: true, ...(await deleteReceipt(id)) });
       if (!action && method === "GET")
         return json(
           await receiptDetail(
@@ -659,6 +726,59 @@ export async function handleApi(
           receipt.content_type,
           params.get("download") === "true",
         );
+      }
+      if (action === "item-category" && method === "POST") {
+        const input = z
+          .object({ itemId: z.uuid(), categoryId: identifier })
+          .strict()
+          .parse(await request.json());
+        if (
+          ["uncategorized", "investments", "pension"].includes(input.categoryId)
+        )
+          throw new AppError("Choose a spending category for this product.");
+        await transaction(async (db) => {
+          const [receipt] = await query(
+            "SELECT id FROM receipts WHERE id=$1 FOR UPDATE",
+            [id],
+            db,
+          );
+          if (!receipt) throw new AppError("Receipt not found.", 404);
+          if (
+            !(
+              await query(
+                "SELECT id FROM categories WHERE id=$1",
+                [input.categoryId],
+                db,
+              )
+            ).length
+          )
+            throw new AppError("Category not found.", 404);
+          const [item] = await query(
+            "UPDATE receipt_items SET category_id=$3,manual=true WHERE receipt_id=$1 AND id=$2 RETURNING id",
+            [id, input.itemId, input.categoryId],
+            db,
+          );
+          if (!item)
+            throw new AppError(
+              "Receipt item not found. Refresh the receipt and try again.",
+              404,
+            );
+          await db.query("UPDATE receipts SET updated_at=now() WHERE id=$1", [
+            id,
+          ]);
+          const links = await query(
+            "SELECT transaction_id FROM receipt_payments WHERE receipt_id=$1 ORDER BY transaction_id",
+            [id],
+            db,
+          );
+          for (const link of links)
+            await applyAllocations(link.transaction_id, db);
+          await db.query(
+            "INSERT INTO corrections(entity,entity_id,change) VALUES('receipt',$1,$2)",
+            [id, JSON.stringify(input)],
+          );
+        });
+        return json({ ok: true });
       }
       if (action === "retry" && method === "POST") {
         const [receipt] = await query(
@@ -713,6 +833,7 @@ export async function handleApi(
             "Product amounts must add up exactly to the nonzero receipt total.",
           );
         await transaction(async (db) => {
+          await requireImportDate(input.purchased_at, db);
           const [receipt] = await query(
             "SELECT * FROM receipts WHERE id=$1 FOR UPDATE",
             [id],
@@ -807,6 +928,7 @@ export async function handleApi(
       }
       if (action === "cash" && method === "POST") {
         await transaction(async (db) => {
+          const startDate = await lockImportWindow(db);
           const [receipt] = await query(
             "SELECT * FROM receipts WHERE id=$1 FOR UPDATE",
             [id],
@@ -819,6 +941,10 @@ export async function handleApi(
           )
             throw new AppError(
               "Validate the receipt before recording cash payment.",
+            );
+          if (receipt.purchased_at < startDate)
+            throw new AppError(
+              `This receipt is before the import start date (${startDate}).`,
             );
           const [paid] = await query(
             "SELECT coalesce(sum(amount),0)::bigint AS amount FROM receipt_payments WHERE receipt_id=$1",
@@ -966,6 +1092,26 @@ export async function handleApi(
       );
       return json({ ok: true });
     }
+    if (route === "merchants" && method === "GET")
+      return json(await merchantGroups());
+    if (route === "merchants" && method === "POST") {
+      const input = z
+        .object({
+          id: z.uuid().optional(),
+          name: z.string().trim().min(1).max(200),
+          aliases: z.array(z.string().trim().min(1).max(200)).max(500),
+        })
+        .parse(await request.json());
+      return json(await saveMerchantGroup(input));
+    }
+    if (
+      segments[0] === "merchants" &&
+      segments.length === 2 &&
+      method === "DELETE"
+    ) {
+      await deleteMerchantGroup(uuid(segments[1]));
+      return json({ ok: true });
+    }
     if (route === "rules" && method === "GET")
       return json(
         await query(
@@ -1073,7 +1219,15 @@ export async function handleApi(
         workerAt: heartbeat?.updated_at || null,
         inboundUrl: `${config.appUrl}/api/inbound/email`,
         lidl: await lidlStatus(),
+        importStartDate: await importStartDate(),
       });
+    }
+    if (route === "settings/import-window" && method === "POST") {
+      const input = z
+        .object({ startDate: dateInput })
+        .strict()
+        .parse(await request.json());
+      return json(await saveImportStartDate(input.startDate));
     }
     if (route === "settings/lidl" && method === "POST") {
       const input = z

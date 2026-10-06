@@ -52,11 +52,33 @@ export async function migrate() {
         "utf8",
       );
       await db.query(sql);
+      if (
+        !(await db.query("SELECT 1 FROM schema_migrations WHERE version=2"))
+          .rowCount
+      ) {
+        await db.query(
+          await readFile(
+            path.resolve("migrations/002-merchant-aliases.sql"),
+            "utf8",
+          ),
+        );
+      }
       for (const [id, name, color] of CATEGORY_SEEDS)
         await db.query(
           "INSERT INTO categories(id,name,color) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
           [id, name, color],
         );
+      if (
+        !(await db.query("SELECT 1 FROM schema_migrations WHERE version=3"))
+          .rowCount
+      ) {
+        await db.query(
+          await readFile(
+            path.resolve("migrations/003-double-entry.sql"),
+            "utf8",
+          ),
+        );
+      }
     }).catch((error) => {
       globalDb.expenseMigration = undefined;
       throw error;

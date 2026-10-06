@@ -7,6 +7,7 @@ A private, single-owner web app for tracking bank transactions and itemized rece
 - Bank connections through Enable Banking, with scheduled imports and manual refresh.
 - Receipt uploads, local OCR, review, and matching to bank payments; Amazon.de invoice packs, Lidl Plus imports, and forwarded email ingestion.
 - Transaction search, cash entries, classification rules, and product categories.
+- Double-entry journals, account balances, and editable opening balances, with database-enforced balancing.
 - Spending, income, cash flow, and investment and pension reporting, with each currency tracked separately.
 - CSV exports and encrypted backups of the database and original documents.
 

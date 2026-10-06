@@ -1,3 +1,4 @@
+import { lockImportWindow, removeReceipts } from "./import-window";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config";
@@ -104,6 +105,26 @@ export async function storeReceipt(
   await enqueue("receipt-parse", { receiptId: receipt.id }, receipt.id);
   return { id: receipt.id, duplicate: false };
 }
+export async function deleteReceipt(id: string) {
+  return transaction(async (db) => {
+    // Wait for parsing and imports before deleting a canonical receipt and
+    // its duplicates, so a parser cannot add a reference during deletion.
+    await lockImportWindow(db, true);
+    const [receipt] = await query(
+      "SELECT id FROM receipts WHERE id=$1 FOR UPDATE",
+      [id],
+      db,
+    );
+    if (!receipt) throw new AppError("Receipt not found.", 404);
+    const removedReceipts = await removeReceipts([id], db);
+    await db.query(
+      "INSERT INTO corrections(entity,entity_id,change) VALUES('receipt',$1,'{\"deleted\":true}')",
+      [id],
+    );
+    return { removedReceipts };
+  });
+}
+
 async function recognizeImage(buffer: Buffer): Promise<string> {
   const { createWorker } = await import("tesseract.js");
   const cachePath = path.join(config.dataDir, "ocr");
@@ -191,6 +212,7 @@ export async function processReceipt(id: string) {
     "INSERT INTO import_runs(type,source_id) VALUES('receipt',$1) RETURNING id",
     [id],
   );
+  let skipped = false;
   try {
     const text = await extractDocument(
       await readFile(storageFile(receipt.storage_path)),
@@ -208,12 +230,18 @@ export async function processReceipt(id: string) {
       );
     }
     await transaction(async (db) => {
+      const startDate = await lockImportWindow(db);
       const [current] = await query(
         "SELECT manual FROM receipts WHERE id=$1 FOR UPDATE",
         [id],
         db,
       );
-      if (current.manual) return;
+      if (!current || current.manual) return;
+      if (parsed.purchasedAt && parsed.purchasedAt < startDate) {
+        await removeReceipts([id], db);
+        skipped = true;
+        return;
+      }
       const identity =
         parsed.number && parsed.purchasedAt
           ? digest(
@@ -336,8 +364,8 @@ export async function processReceipt(id: string) {
       }
     });
     await query(
-      "UPDATE import_runs SET status='complete',count=1,finished_at=now() WHERE id=$1",
-      [run.id],
+      "UPDATE import_runs SET status='complete',count=$2,finished_at=now() WHERE id=$1",
+      [run.id, skipped ? 0 : 1],
     );
   } catch (error) {
     await query(

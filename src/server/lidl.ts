@@ -1,4 +1,6 @@
-import { query, pool } from "./db";
+import { importStartDate, lockImportWindow } from "./import-window";
+import { parseReceipt } from "../lib/receipt-parser";
+import { query, pool, transaction } from "./db";
 import { decrypt, encrypt, digest } from "./crypto";
 import { AppError } from "./errors";
 import { storeReceipt } from "./receipts";
@@ -103,17 +105,27 @@ export async function syncLidl(interactive = false) {
           throw new AppError(
             "The Lidl connection changed during import. Retry with the current settings.",
           );
+        const date = parseReceipt(text, "lidl").purchasedAt;
+        if (date && date < (await importStartDate(db))) return;
         const result = await storeReceipt(
           Buffer.from(text),
           `lidl-${id}.txt`,
           "lidl",
           "lidl",
         );
-        await query(
-          "INSERT INTO retailer_receipts(retailer,account_key,external_id,receipt_id) VALUES('lidl',$1,$2,$3) ON CONFLICT DO NOTHING",
-          [account, id, result.id],
-          db,
-        );
+        await transaction(async (tx) => {
+          await lockImportWindow(tx);
+          const [stored] = await query(
+            "SELECT id FROM receipts WHERE id=$1 FOR KEY SHARE",
+            [result.id],
+            tx,
+          );
+          if (stored)
+            await tx.query(
+              "INSERT INTO retailer_receipts(retailer,account_key,external_id,receipt_id) VALUES('lidl',$1,$2,$3) ON CONFLICT DO NOTHING",
+              [account, id, result.id],
+            );
+        });
         if (!result.duplicate) imported++;
         await query(
           "UPDATE import_runs SET count=$2 WHERE id=$1",

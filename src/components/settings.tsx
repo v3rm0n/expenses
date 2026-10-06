@@ -1,4 +1,5 @@
 "use client";
+import { ISODateInput } from "./iso-date-input";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 import {
@@ -33,7 +34,9 @@ import {
 } from "./ui";
 import { formatMoney, parseMoney } from "../lib/money";
 import type { EmailMessage } from "../lib/email-message";
+import { MerchantGroups } from "./merchants";
 import { AmazonImport } from "./amazon-import";
+import { AccountingPanel } from "./accounting";
 
 type Bank = { name: string; country: string; maximum_consent_validity: number };
 type Connection = {
@@ -628,6 +631,7 @@ export function RulesView({ context: ctx }: { context: AppContext }) {
   );
 }
 type Settings = {
+  importStartDate: string;
   appUrl: string;
   bankingRedirect: string;
   port: number;
@@ -698,6 +702,19 @@ export function SettingsView({ context: ctx }: { context: AppContext }) {
   return (
     <div className="view-stack">
       <ErrorMessage message={error || settings.error} />
+      <MerchantGroups context={ctx} />
+      <AccountingPanel context={ctx} />
+      <section className="panel">
+        <SectionTitle
+          title="Import period"
+          description="Keep transactions and receipts from this date onward."
+        />
+        <ImportWindowForm
+          key={s.importStartDate}
+          startDate={s.importStartDate}
+          context={ctx}
+        />
+      </section>
       <div className="settings-grid">
         <section className="panel">
           <SectionTitle
@@ -1339,6 +1356,61 @@ function PasswordForm({ context: ctx }: { context: AppContext }) {
       </label>
       <button className="button primary" disabled={busy}>
         {busy ? "Updating…" : "Change password"}
+      </button>
+    </form>
+  );
+}
+
+function ImportWindowForm({
+  startDate,
+  context: ctx,
+}: {
+  startDate: string;
+  context: AppContext;
+}) {
+  const [date, setDate] = useState(startDate);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <form
+      className="padded-form"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setBusy(true);
+        setError(null);
+        try {
+          const result = await api<{
+            removedTransactions: number;
+            removedReceipts: number;
+          }>("settings/import-window", { startDate: date });
+          ctx.refresh();
+          ctx.notify(
+            `Import start date saved. Removed ${result.removedTransactions} transactions and ${result.removedReceipts} receipts.`,
+          );
+        } catch (e) {
+          setError((e as Error).message);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <ErrorMessage message={error} />
+      <label>
+        Import start date
+        <ISODateInput
+          value={date}
+          onChange={(event) => setDate(event.target.value)}
+          required
+          disabled={busy}
+        />
+      </label>
+      <p className="form-help">
+        Saving removes records before this date and skips them during future
+        imports. Undated records stay until their date is known. Moving the date
+        earlier allows older records to be imported again.
+      </p>
+      <button className="button primary" disabled={busy}>
+        {busy ? "Saving…" : "Save start date"}
       </button>
     </form>
   );

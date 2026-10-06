@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { validDate } from "../lib/money";
+import { monthLabel, shortDate } from "../lib/dates";
 import { CalendarDays } from "lucide-react";
 
 type Props = Omit<ComponentProps<"input">, "type" | "value" | "min" | "max"> & {
@@ -11,7 +12,7 @@ type Props = Omit<ComponentProps<"input">, "type" | "value" | "min" | "max"> & {
   precision?: "date" | "month";
 };
 
-// Keep ISO text visible while using the browser's calendar for date selection.
+// Show named months at rest, retaining ISO values for editing and submission.
 export function ISODateInput({
   value,
   min,
@@ -42,8 +43,14 @@ export function ISODateInput({
   useEffect(() => {
     input.current?.setCustomValidity(validate(draft));
   }, [draft, min, max, precision]);
+  const displayLabel =
+    draft && !validate(draft)
+      ? precision === "month"
+        ? monthLabel(draft)
+        : shortDate(draft)
+      : "";
   return (
-    <span className="iso-date-input">
+    <span className="iso-date-input" data-formatted={!!displayLabel}>
       <input
         {...props}
         ref={input}
@@ -67,6 +74,13 @@ export function ISODateInput({
           onBlur?.(event);
         }}
       />
+      {displayLabel && (
+        <span
+          className="date-input-label"
+          data-label={displayLabel}
+          aria-hidden="true"
+        />
+      )}
       <span className="iso-date-picker">
         <CalendarDays size={16} aria-hidden="true" />
         <input

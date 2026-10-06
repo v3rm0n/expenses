@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
 import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
 const config: NextConfig = {
+  // The development badge otherwise covers the mobile Overview tab.
+  devIndicators: false,
   serverExternalPackages: [
     "playwright",
     "playwright-core",

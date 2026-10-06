@@ -195,11 +195,59 @@ function rimiDigitalItems(text: string, currency: string) {
   }
   if (pending.length)
     issues.push("A Rimi product amount could not be read. Review the receipt.");
-  // Product discounts are already included above; only redeemed loyalty
-  // money is a further basket reduction. Repeated campaign summaries are not.
   const loyalty = text.match(
     /^Kasutatud\s+Sinu\s+RIMI\s+raha\s+([−-]\d+[.,]\s*\d{2})\s*$/im,
   );
+  const birthdayLine = text.match(
+    /^S[üu]nnip[äa]eva\s+soodustus\b[^\n]*$/im,
+  )?.[0];
+  if (birthdayLine) {
+    const discount = lastAmount(birthdayLine, currency);
+    const percent = birthdayLine.match(/[−-]\s*(\d+(?:[.,]\d+)?)\s*%/);
+    const rate = percent ? Number(percent[1].replace(",", ".")) : 0;
+    const netBasket =
+      items.reduce((sum, item) => sum + item.amount, 0) +
+      (loyalty ? parseMoney(loyalty[1], currency) : 0);
+    const printedTotals = [
+      ...text.matchAll(/^(?:KOKKU|KAARDIMAKSE)\s+[^\n]+$/gim),
+    ].map((match) => lastAmount(match[0], currency));
+    // Some exports include birthday savings in each product's "Uus hind".
+    // Apply a summary-only discount only when the basket still needs it.
+    if (!printedTotals.includes(netBasket)) {
+      // Birthday offers cover drinks and party foods, not the whole basket.
+      // Recognize clear product groups and require their rounded percentage
+      // savings to match the printed discount; uncertain baskets stay in review.
+      const products = items.filter(
+        (item) =>
+          item.amount > 0 &&
+          item.categoryId !== "deposits" &&
+          /(?:^|\s)(?:õlu|olu|beer|siider|cider|vein|wine|viin|vodka|viski|whisky|whiskey|rumm|rum\b|džinn|gin\b|liköör|brändi|konjak|šampanja|vahuvein|mahl|juice|vesi|water|limonaad|karastusjook|coca[ -]?cola|pepsi|fanta|sprite|tort|kook|koog|cake|kring|strits)/i.test(
+            item.description,
+          ),
+      );
+      const savings = products.map((item) =>
+        Math.round((item.amount * rate) / 100),
+      );
+      if (
+        discount !== null &&
+        discount < 0 &&
+        rate > 0 &&
+        rate <= 100 &&
+        products.length &&
+        savings.reduce((sum, amount) => sum + amount, 0) === -discount
+      ) {
+        products.forEach((item, i) => {
+          item.amount -= savings[i];
+        });
+      } else {
+        issues.push(
+          "The Rimi birthday discount could not be reconciled with eligible products. Review the receipt.",
+        );
+      }
+    }
+  }
+  // Product and birthday discounts are included above. Redeemed loyalty
+  // money is a further reduction; repeated campaign summaries are not.
   if (loyalty) {
     const discount = parseMoney(loyalty[1], currency);
     const products = items.filter(

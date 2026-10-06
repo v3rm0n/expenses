@@ -1,5 +1,7 @@
 "use client";
+import { useDialogFocus } from "../hooks/use-dialog-focus";
 import { ISODateInput } from "./iso-date-input";
+import { TransactionJournal } from "./accounting";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import { randomEntryId } from "../lib/ids";
@@ -20,6 +22,7 @@ import {
   ChevronRight,
   CheckCheck,
   Clock3,
+  SlidersHorizontal,
 } from "lucide-react";
 import {
   api,
@@ -50,9 +53,12 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
     receipt = searchParams.get("receipt") || "",
     status = searchParams.get("status") || "",
     history = searchParams.get("history") === "true",
+    from = searchParams.get("from") || "",
+    to = searchParams.get("to") || "",
     page = Math.max(1, Math.floor(Number(searchParams.get("page")) || 1)),
     minimum = searchParams.get("minimum") || "",
     maximum = searchParams.get("maximum") || "";
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [showNew, setShowNew] = useState(searchParams.get("new") === "true");
   useEffect(
     () => setShowNew(searchParams.get("new") === "true"),
@@ -63,7 +69,11 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
   const params = new URLSearchParams({
     currency: ctx.currency,
     page: String(page),
-    ...(history ? {} : { month: ctx.month }),
+    ...(from || to
+      ? { ...(from ? { from } : {}), ...(to ? { to } : {}) }
+      : history
+        ? {}
+        : { month: ctx.month }),
     ...(search ? { search } : {}),
     ...(category ? { category } : {}),
     ...(account ? { account } : {}),
@@ -113,22 +123,67 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
       setBulkBusy(false);
     }
   };
+  const activeFilters = [
+    {
+      key: "category",
+      value: category,
+      label:
+        ctx.state.categories.find((row) => row.id === category)?.name ||
+        category,
+    },
+    {
+      key: "account",
+      value: account,
+      label:
+        ctx.state.accounts.find((row) => row.id === account)?.nickname ||
+        ctx.state.accounts.find((row) => row.id === account)?.name ||
+        account,
+    },
+    { key: "kind", value: kind, label: kind.replaceAll("_", " ") },
+    {
+      key: "receipt",
+      value: receipt,
+      label: `Receipt ${receipt.replaceAll("_", " ")}`,
+    },
+    {
+      key: "status",
+      value: status,
+      label: status === "PDNG" ? "Pending" : "Booked",
+    },
+    { key: "minimum", value: minimum, label: `Min ${minimum}` },
+    { key: "maximum", value: maximum, label: `Max ${maximum}` },
+  ].filter((filter) => filter.value);
+  const clearFilters = () =>
+    updateQuery(
+      {
+        category: "",
+        account: "",
+        kind: "",
+        receipt: "",
+        status: "",
+        minimum: "",
+        maximum: "",
+      },
+      true,
+    );
   const exportParams = new URLSearchParams(params);
   exportParams.delete("page");
   const returnTo = `/transactions?${searchParams.toString()}`;
   return (
     <div className="view-stack">
-      <div className="action-row">
+      <div className="action-row transaction-actions">
         <div className="tabs">
           <button
-            className={!history ? "selected" : ""}
-            onClick={() => setFilter("history", "")}
+            className={!history && !from && !to ? "selected" : ""}
+            onClick={() => updateQuery({ history: "", from: "", to: "" }, true)}
           >
             Selected month
           </button>
           <button
-            className={history ? "selected" : ""}
-            onClick={() => setFilter("history", "true")}
+            className={history && !from && !to ? "selected" : ""}
+            onClick={() =>
+              updateQuery({ history: "true", from: "", to: "" }, true)
+            }
           >
             All history
           </button>
@@ -146,8 +201,13 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
           </button>
         </div>
       </div>
+      {(from || to) && (
+        <p className="muted" role="status">
+          Transactions for {from || "the beginning"} – {to || "today"}
+        </p>
+      )}
       <section className="panel">
-        <div className="filters">
+        <div className="transaction-search">
           <label className="search-field">
             <Search size={17} />
             <input
@@ -157,90 +217,179 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
               onChange={(e) => setFilter("search", e.target.value)}
             />
           </label>
-          <select
-            aria-label="Filter category"
-            value={category}
-            onChange={(e) => setFilter("category", e.target.value)}
+          <button
+            className={`button secondary mobile-filter-toggle ${activeFilters.length ? "has-filters" : ""}`}
+            aria-expanded={filtersOpen}
+            aria-controls="transaction-filters"
+            onClick={() => setFiltersOpen((value) => !value)}
           >
-            <option value="">All categories</option>
-            {ctx.state.categories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <select
-            aria-label="Filter account"
-            value={account}
-            onChange={(e) => setFilter("account", e.target.value)}
-          >
-            <option value="">All accounts</option>
-            {ctx.state.accounts.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.nickname || a.name}
-                {a.currency ? ` · ${a.currency}` : ""}
-              </option>
-            ))}
-          </select>
-          <select
-            aria-label="Filter payment type"
-            value={kind}
-            onChange={(e) => setFilter("kind", e.target.value)}
-          >
-            <option value="">All types</option>
-            {[
-              "expense",
-              "income",
-              "refund",
-              "transfer",
-              "cash_movement",
-              "investment",
-              "pension",
-            ].map((k) => (
-              <option key={k} value={k}>
-                {k.replace("_", " ")}
-              </option>
-            ))}
-          </select>
+            <SlidersHorizontal size={18} /> Filters
+            {activeFilters.length > 0 && (
+              <span className="filter-count">{activeFilters.length}</span>
+            )}
+          </button>
         </div>
-        <div className="filters secondary-filters">
-          <select
-            aria-label="Filter receipt status"
-            value={receipt}
-            onChange={(e) => setFilter("receipt", e.target.value)}
-          >
-            <option value="">Any receipt status</option>
-            <option value="linked">Receipt linked</option>
-            <option value="missing">Receipt missing</option>
-            <option value="not_required">Receipt not required</option>
-          </select>
-          <select
-            aria-label="Filter booking status"
-            value={status}
-            onChange={(e) => setFilter("status", e.target.value)}
-          >
-            <option value="">Booked & pending</option>
-            <option value="BOOK">Booked</option>
-            <option value="PDNG">Pending</option>
-          </select>
-          <input
-            aria-label="Minimum amount"
-            placeholder="Min amount"
-            inputMode="decimal"
-            value={minimum}
-            onChange={(e) => setFilter("minimum", e.target.value)}
-          />
-          <input
-            aria-label="Maximum amount"
-            placeholder="Max amount"
-            inputMode="decimal"
-            value={maximum}
-            onChange={(e) => setFilter("maximum", e.target.value)}
-          />
+        <div
+          id="transaction-filters"
+          className={`transaction-filter-fields ${filtersOpen ? "open" : ""}`}
+        >
+          <div className="filters">
+            <label className="transaction-filter-label">
+              <span>Category</span>
+              <select
+                aria-label="Filter category"
+                value={category}
+                onChange={(e) => setFilter("category", e.target.value)}
+              >
+                <option value="">All categories</option>
+                {ctx.state.categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="transaction-filter-label">
+              <span>Account</span>
+              <select
+                aria-label="Filter account"
+                value={account}
+                onChange={(e) => setFilter("account", e.target.value)}
+              >
+                <option value="">All accounts</option>
+                {ctx.state.accounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.nickname || a.name}
+                    {a.currency ? ` · ${a.currency}` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="transaction-filter-label">
+              <span>Payment type</span>
+              <select
+                aria-label="Filter payment type"
+                value={kind}
+                onChange={(e) => setFilter("kind", e.target.value)}
+              >
+                <option value="">All types</option>
+                {[
+                  "expense",
+                  "income",
+                  "refund",
+                  "transfer",
+                  "cash_movement",
+                  "investment",
+                  "pension",
+                ].map((k) => (
+                  <option key={k} value={k}>
+                    {k.replace("_", " ")}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="filters secondary-filters">
+            <label className="transaction-filter-label">
+              <span>Receipt status</span>
+              <select
+                aria-label="Filter receipt status"
+                value={receipt}
+                onChange={(e) => setFilter("receipt", e.target.value)}
+              >
+                <option value="">Any receipt status</option>
+                <option value="linked">Receipt linked</option>
+                <option value="missing">Receipt missing</option>
+                <option value="not_required">Receipt not required</option>
+              </select>
+            </label>
+            <label className="transaction-filter-label">
+              <span>Booking status</span>
+              <select
+                aria-label="Filter booking status"
+                value={status}
+                onChange={(e) => setFilter("status", e.target.value)}
+              >
+                <option value="">Booked & pending</option>
+                <option value="BOOK">Booked</option>
+                <option value="PDNG">Pending</option>
+              </select>
+            </label>
+            <label className="transaction-filter-label">
+              <span>Minimum amount</span>
+              <input
+                aria-label="Minimum amount"
+                placeholder="Min amount"
+                inputMode="decimal"
+                value={minimum}
+                onChange={(e) => setFilter("minimum", e.target.value)}
+              />
+            </label>
+            <label className="transaction-filter-label">
+              <span>Maximum amount</span>
+              <input
+                aria-label="Maximum amount"
+                placeholder="Max amount"
+                inputMode="decimal"
+                value={maximum}
+                onChange={(e) => setFilter("maximum", e.target.value)}
+              />
+            </label>
+          </div>
+          <div className="mobile-filter-footer">
+            <button
+              className="text-link"
+              disabled={!activeFilters.length}
+              onClick={clearFilters}
+            >
+              Clear filters
+            </button>
+            <button
+              className="button primary"
+              onClick={() => setFiltersOpen(false)}
+            >
+              Show results
+            </button>
+          </div>
         </div>
+        {activeFilters.length > 0 && (
+          <div
+            className="active-transaction-filters"
+            aria-label="Active filters"
+          >
+            {activeFilters.map((filter) => (
+              <button
+                key={filter.key}
+                aria-label={`Remove ${filter.key} filter`}
+                onClick={() => setFilter(filter.key, "")}
+              >
+                <span>
+                  {
+                    (
+                      {
+                        category: "Category",
+                        account: "Account",
+                        kind: "Type",
+                        receipt: "Receipt",
+                        status: "Status",
+                        minimum: "Amount",
+                        maximum: "Amount",
+                      } as Record<string, string>
+                    )[filter.key]
+                  }
+                  : {filter.label}
+                </span>
+                <X size={14} />
+              </button>
+            ))}
+            <button onClick={clearFilters}>Clear all</button>
+          </div>
+        )}
         <ErrorMessage message={error || bulkError} />
         {selectable.length > 0 && (
-          <div className="action-row bulk-receipt-actions">
+          <div
+            className={`action-row bulk-receipt-actions ${visibleSelected.length ? "has-selection" : ""}`}
+          >
             <label className="checkbox">
               <input
                 type="checkbox"
@@ -361,6 +510,10 @@ function CashModal({
     [kind, setKind] = useState("expense"),
     [error, setError] = useState<string | null>(null),
     [busy, setBusy] = useState(false);
+  const dialog = useRef<HTMLElement>(null);
+  useDialogFocus(dialog, () => {
+    if (!busy) close();
+  });
   const key = useRef(randomEntryId());
   const save = async (event: FormEvent) => {
     event.preventDefault();
@@ -386,8 +539,15 @@ function CashModal({
     }
   };
   return (
-    <div className="modal-backdrop">
+    <div
+      className="modal-backdrop"
+      onClick={(event) => {
+        if (!busy && event.target === event.currentTarget) close();
+      }}
+    >
       <section
+        ref={dialog}
+        tabIndex={-1}
         className="modal"
         role="dialog"
         aria-modal="true"
@@ -411,6 +571,7 @@ function CashModal({
             Merchant or description
             <input
               required
+              data-dialog-autofocus
               value={merchant}
               onChange={(e) => setMerchant(e.target.value)}
               maxLength={200}
@@ -1040,6 +1201,11 @@ export function TransactionDetailView({
               </button>
             </div>
           ) : null}
+          <TransactionJournal
+            id={id}
+            currency={data.currency}
+            revision={ctx.revision}
+          />
           {data.source === "bank" && (
             <details className="source-details">
               <summary>Original bank data</summary>
@@ -1274,7 +1440,7 @@ function ReceiptTable({
   transactionId?: string;
 }) {
   return (
-    <div className="table-wrap">
+    <div className="table-wrap receipt-table">
       <table>
         <thead>
           <tr>
@@ -1308,16 +1474,19 @@ function ReceiptTable({
                   </span>
                 </button>
               </td>
-              <td className="nowrap">
+              <td className="receipt-date nowrap">
                 {receipt.purchased_at
                   ? shortDate(receipt.purchased_at)
                   : "To review"}
               </td>
-              <td>{receipt.item_count || "—"}</td>
-              <td>
+              <td className="receipt-products">
+                <span className="mobile-product-label">Products: </span>
+                {receipt.item_count || "—"}
+              </td>
+              <td className="receipt-status">
                 <ReceiptStatus receipt={receipt} />
               </td>
-              <td className="right amount">
+              <td className="receipt-amount right amount">
                 {receipt.total === null
                   ? "—"
                   : formatMoney(receipt.total, receipt.currency)}
@@ -1458,6 +1627,26 @@ export function ReceiptDetailView({
     e.preventDefault();
     if (await perform(`receipts/${id}`, draft)) setEditing(false);
   };
+  const remove = async () => {
+    if (
+      !confirm(
+        "Delete this receipt and any duplicate copies? Linked payments will remain in Transactions.",
+      )
+    )
+      return;
+    setBusy(true);
+    setSaveError(null);
+    try {
+      await api(`receipts/${id}`, undefined, "DELETE");
+      ctx.refresh();
+      ctx.notify("Receipt deleted.");
+      ctx.navigate(returnTo);
+    } catch (e) {
+      setSaveError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const change = (field: keyof Draft, value: unknown) =>
     setDraft((d) => (d ? { ...d, [field]: value } : d));
   const changeItem = (index: number, field: string, value: string) =>
@@ -1471,6 +1660,28 @@ export function ReceiptDetailView({
           }
         : d,
     );
+  const categorySuggestions = (
+    index: number,
+    onSelect: (categoryId: string) => void,
+  ) => (
+    <div
+      className="receipt-category-suggestions"
+      role="group"
+      aria-label={`Quick categories for product ${index + 1}`}
+    >
+      {data.suggested_categories.map((category) => (
+        <button
+          key={category.id}
+          type="button"
+          className="button secondary"
+          disabled={busy}
+          onClick={() => onSelect(category.id)}
+        >
+          {category.name}
+        </button>
+      ))}
+    </div>
+  );
   let lineTotal: number | null = null;
   try {
     lineTotal = draft.items.reduce(
@@ -1507,6 +1718,7 @@ export function ReceiptDetailView({
                 <ReceiptStatus receipt={{ ...data, linked_amount: paid }} />
                 <button
                   className="button secondary"
+                  disabled={busy}
                   onClick={() => setEditing(!editing)}
                 >
                   {editing ? "Cancel editing" : "Edit receipt"}
@@ -1634,6 +1846,10 @@ export function ReceiptDetailView({
                       >
                         <X size={16} />
                       </button>
+                      {item.category_id === "uncategorized" &&
+                        categorySuggestions(i, (categoryId) =>
+                          changeItem(i, "category_id", categoryId),
+                        )}
                     </div>
                   ))}
                 </div>
@@ -1733,6 +1949,13 @@ export function ReceiptDetailView({
                                   )?.name
                                 }
                               </Badge>
+                              {item.category_id === "uncategorized" &&
+                                categorySuggestions(i, (categoryId) => {
+                                  void perform(`receipts/${id}/item-category`, {
+                                    itemId: item.id,
+                                    categoryId,
+                                  });
+                                })}
                             </td>
                             <td className="right amount">{fmt(item.amount)}</td>
                           </tr>
@@ -1934,6 +2157,15 @@ export function ReceiptDetailView({
                   Retry extraction
                 </button>
               )}
+              <button
+                type="button"
+                className="button danger wide"
+                disabled={busy}
+                onClick={() => void remove()}
+              >
+                <Trash2 size={16} />
+                Delete receipt
+              </button>
               <small className="muted">
                 Imported {dateTime(data.created_at)} · {data.source}
               </small>

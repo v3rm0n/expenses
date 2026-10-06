@@ -140,8 +140,12 @@ export function parseWoltReceipt(text: string): ParsedReceipt | null {
   // seller's VAT invoice total. Use the explicitly printed discount to
   // reconcile the net spend; table discount previews are already included.
   const paymentDiscounts = paymentLines
-    .filter((line) => /^Discount\b/i.test(line))
-    .map((line) => money(line.match(/^Discount\s+([\d.,]+)$/i)?.[1]));
+    .filter((line) => /^(?:Discount|Wolt discount credits)\b/i.test(line))
+    .map((line) =>
+      money(
+        line.match(/^(?:Discount|Wolt discount credits)\s+([\d.,]+)$/i)?.[1],
+      ),
+    );
   if (paymentDiscounts.some((amount) => amount === null))
     issues.push("The Wolt payment discount could not be read.");
   const paymentDiscount = paymentDiscounts.reduce<number>(

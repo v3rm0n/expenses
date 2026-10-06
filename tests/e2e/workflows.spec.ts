@@ -1,4 +1,5 @@
-import { test, expect, type Cookie } from "@playwright/test";
+import { test, expect, type Cookie, type Page } from "@playwright/test";
+import { decimalMoney } from "../../src/lib/money";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import {
@@ -9,6 +10,28 @@ import {
 } from "../fixtures";
 const password = "only-for-isolated-test-db";
 let ownerCookies: Cookie[] = [];
+async function signInOwner(page: Page) {
+  if (ownerCookies.length) await page.context().addCookies(ownerCookies);
+  const status = await (await page.request.get("/api/auth/status")).json();
+  if (!status.authenticated) {
+    const response = await page.request.post(
+      status.needsSetup ? "/api/auth/setup" : "/api/auth/login",
+      {
+        headers: { Origin: "http://127.0.0.1:4318" },
+        data: status.needsSetup
+          ? {
+              name: "Test owner",
+              password,
+              token: "expenses-test-setup-token-only",
+            }
+          : { password },
+      },
+    );
+    expect(response.ok()).toBe(true);
+    ownerCookies = await page.context().cookies();
+  }
+  return status;
+}
 test.describe.configure({ mode: "serial" });
 test("owner setup, cash ledger, receipt corrections and mobile overview", async ({
   page,
@@ -36,6 +59,20 @@ test("owner setup, cash ledger, receipt corrections and mobile overview", async 
   const dateField = dialog.getByLabel("Date", { exact: true });
   await expect(dateField).toHaveAttribute("type", "text");
   await expect(dateField).toHaveValue(today);
+  const dateLabel = dialog.locator(".date-input-label").first();
+  const namedDate = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "UTC",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(new Date(`${today}T12:00:00Z`));
+  await expect(dateLabel).toHaveAttribute("data-label", namedDate);
+  await expect(dateLabel).toBeVisible();
+  await dateField.focus();
+  await expect(dateLabel).toBeHidden();
+  await expect(dateField).toHaveValue(today);
+  await dateField.blur();
+  await expect(dateLabel).toBeVisible();
   await dateField.fill("2026-02-30");
   expect(
     await dateField.evaluate((element: HTMLInputElement) =>
@@ -82,7 +119,7 @@ test("owner setup, cash ledger, receipt corrections and mobile overview", async 
     page.getByRole("button", { name: /Market purchase/ }),
   ).toBeVisible();
   await page.getByRole("button", { name: /Market purchase/ }).click();
-  await expect(page.getByText(today, { exact: true })).toBeVisible();
+  await expect(page.getByText(namedDate, { exact: true })).toBeVisible();
   await page.getByLabel("Category 1", { exact: true }).selectOption("gifts");
   await page.getByLabel("Personal note").fill("Changed by the owner");
   await page.getByRole("button", { name: "Save changes" }).click();
@@ -164,7 +201,9 @@ test("owner setup, cash ledger, receipt corrections and mobile overview", async 
     page.getByRole("heading", { name: "Create a rule" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Overview", exact: true }).click();
-  await page.getByLabel("Month", { exact: true }).fill(today.slice(0, 7));
+  await page
+    .getByLabel("Period ending", { exact: true })
+    .fill(today.slice(0, 7));
   await mkdir(".data/screenshots", { recursive: true });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.screenshot({
@@ -279,7 +318,7 @@ test("authentication, CSRF, email bearer token and idempotent cash imports", asy
   ).toBe(409);
 });
 
-test("investment and pension classifications update the overview and fit a phone", async ({
+test("overview combines investment and pension analysis and fits a phone", async ({
   page,
 }) => {
   const headers = { Origin: "http://127.0.0.1:4318" };
@@ -330,6 +369,7 @@ test("investment and pension classifications update the overview and fit a phone
   expect(summary.net_cash_flow).toBe(-15000);
   await page.goto("/");
   await page.getByLabel("Currency", { exact: true }).selectOption("GBP");
+  await page.getByLabel("Period length").selectOption("6");
   const section = page.locator(".contributions-panel");
   await expect(
     section.getByRole("heading", { name: "Investments and pensions" }),
@@ -462,7 +502,7 @@ test("filters survive detail navigation, CSV matches results, and mobile amounts
   await expect(monthCalendar).toHaveAttribute("type", "month");
   await monthCalendar.fill("2026-08");
   await page.reload();
-  await expect(page.getByLabel("Month", { exact: true })).toHaveValue(
+  await expect(page.getByLabel("Period ending", { exact: true })).toHaveValue(
     "2026-08",
   );
   await page.getByRole("button", { name: "Open navigation" }).click();
@@ -1326,4 +1366,1085 @@ test("account nicknames persist and appear in filters, lists and transaction det
     (await (await page.request.get(`/api/transactions/${entry.id}`)).json())
       .account_name,
   ).toBe(account.name);
+});
+
+test("overview supports one to twelve months, cumulative net cash flow and signed refunds", async ({
+  page,
+}) => {
+  const password = "only-for-isolated-test-db";
+  const headers = { Origin: "http://127.0.0.1:4318" };
+  const status = await signInOwner(page);
+  const create = async (
+    date: string,
+    merchant: string,
+    amount: string,
+    category: string,
+    kind = "expense",
+    currency = "JPY",
+  ) => {
+    const response = await page.request.post("/api/transactions", {
+      headers,
+      data: {
+        date,
+        merchant,
+        amount,
+        category,
+        kind: ["investment", "pension"].includes(kind) ? "expense" : kind,
+        currency,
+        idempotencyKey: randomUUID(),
+      },
+    });
+    expect(response.ok()).toBe(true);
+    if (["investment", "pension"].includes(kind)) {
+      const entry = await response.json();
+      const updated = await page.request.post(`/api/transactions/${entry.id}`, {
+        headers,
+        data: { kind },
+      });
+      expect(updated.ok()).toBe(true);
+    }
+  };
+  await create("2033-12-31", "Outside start", "999", "groceries");
+  await create("2034-01-01", "Analysis market", "600", "groceries");
+  await create("2034-02-15", "Analysis cafe", "200", "restaurants");
+  await create("2034-03-15", "Analysis market", "800", "groceries", "refund");
+  await create(
+    "2034-06-30",
+    "Analysis salary",
+    "2000",
+    "uncategorized",
+    "income",
+  );
+  await create(
+    "2034-01-15",
+    "January income",
+    "100",
+    "uncategorized",
+    "income",
+  );
+  await create("2034-03-15", "March income", "300", "uncategorized", "income");
+  await create("2034-07-01", "Outside end", "999", "groceries");
+  await create(
+    "2034-01-01",
+    "Other currency",
+    "99",
+    "groceries",
+    "expense",
+    "USD",
+  );
+  await create(
+    "2033-12-31",
+    "Earlier investment",
+    "900",
+    "uncategorized",
+    "investment",
+  );
+  await create(
+    "2034-01-01",
+    "Period investment",
+    "300",
+    "uncategorized",
+    "investment",
+  );
+  await create(
+    "2034-06-30",
+    "Period pension",
+    "150",
+    "uncategorized",
+    "pension",
+  );
+  await create(
+    "2034-07-01",
+    "Later investment",
+    "700",
+    "uncategorized",
+    "investment",
+  );
+  await create(
+    "2034-02-01",
+    "Other currency investment",
+    "50",
+    "uncategorized",
+    "investment",
+    "USD",
+  );
+  const reportResponse = await page.request.get(
+    "/api/spending-analysis?month=2034-06&currency=JPY",
+  );
+  expect(reportResponse.ok()).toBe(true);
+  const report = await reportResponse.json();
+  expect(report.months.map((point: { month: string }) => point.month)).toEqual([
+    "2034-01",
+    "2034-02",
+    "2034-03",
+    "2034-04",
+    "2034-05",
+    "2034-06",
+  ]);
+  expect(
+    report.months.map((point: { spending: number }) => point.spending),
+  ).toEqual([600, 200, -800, 0, 0, 0]);
+  expect(report.months[5].income).toBe(2000);
+  expect(report.investment.contributed).toBe(300);
+  expect(report.investment.history_contributed).toBe(1200);
+  expect(report.pension.contributed).toBe(150);
+  expect(report.months[0].investment).toBe(300);
+  expect(report.months[5].pension).toBe(150);
+  expect(
+    report.categories.reduce(
+      (sum: number, row: { amount: number }) => sum + row.amount,
+      0,
+    ),
+  ).toBe(0);
+  expect(
+    report.merchants.every(
+      (row: { merchant: string }) =>
+        ![
+          "Outside start",
+          "Outside end",
+          "Other currency",
+          "Analysis salary",
+        ].includes(row.merchant),
+    ),
+  ).toBe(true);
+  expect(
+    (
+      await page.request.get(
+        "/api/spending-analysis?month=2034-13&currency=JPY",
+      )
+    ).status(),
+  ).toBe(400);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/?month=2034-06&currency=JPY");
+  await expect(
+    page.getByRole("heading", { name: "Overview", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator("nav").getByRole("button", { name: "Overview", exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    page
+      .locator("nav")
+      .getByRole("button", { name: "6 month view", exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByLabel("Period length")).toHaveValue("1");
+  await expect(page.locator(".contributions-panel tbody tr")).toHaveCount(1);
+  await page.getByLabel("Period length").selectOption("6");
+  await expect(page).toHaveURL(/months=6/);
+  await expect(
+    page.getByRole("heading", { name: "Spending and income" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Period ending", { exact: true })).toHaveValue(
+    "2034-06",
+  );
+  const contributions = page.locator(".contributions-panel");
+  await expect(contributions.locator("tbody tr")).toHaveCount(6);
+  await expect(contributions.locator(".metric-value").nth(0)).toHaveText(
+    "JP¥300",
+  );
+  await expect(contributions.locator(".metric-value").nth(1)).toHaveText(
+    "JP¥150",
+  );
+  await contributions
+    .getByRole("button", { name: "View transfers" })
+    .first()
+    .click();
+  await expect(page).toHaveURL(/from=2034-01-01&to=2034-06-30/);
+  await expect(
+    page.getByRole("button", { name: /Period investment/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: /Earlier investment|Later investment|Other currency investment/,
+    }),
+  ).toHaveCount(0);
+  await page.goto("/six-month?month=2034-06&currency=JPY");
+  await expect(
+    page.getByLabel("Cumulative net cash flow line", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", {
+      name: /Explore June 2034: spending.*cumulative net cash flow JP¥1,950/,
+    })
+    .focus();
+  await expect(page.locator(".analysis-chart-detail").first()).toContainText(
+    "Cumulative net cash flow JP¥1,950",
+  );
+  await page
+    .getByRole("button", { name: /Explore January 2034: spending/ })
+    .click();
+  await expect(page.getByLabel("Breakdown period")).toHaveValue("2034-01");
+  await page.getByLabel("Analysis category").selectOption("groceries");
+  const merchant = page
+    .locator(".analysis-merchant")
+    .filter({ hasText: "Analysis market" });
+  await merchant.click();
+  await expect(page.locator(".analysis-merchant-detail")).toContainText(
+    "January 2034",
+  );
+  await expect(page.locator(".analysis-merchant-detail")).toContainText(
+    "Groceries",
+  );
+  await page.getByRole("button", { name: "Reset filters" }).click();
+  await expect(page.getByLabel("Breakdown period")).toHaveValue("");
+  await expect(page.getByLabel("Analysis category")).toHaveValue("");
+  await page
+    .getByRole("button", { name: /Explore March 2034: spending/ })
+    .focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByLabel("Breakdown period")).toHaveValue("2034-03");
+  await expect(page.locator(".analysis-category-list")).toContainText(
+    "Net refunds",
+  );
+  await expect(page.locator(".analysis-chart-detail").first()).toContainText(
+    "-JP¥800",
+  );
+  await expect(page.locator(".analysis-chart-detail").first()).toContainText(
+    "Cumulative net cash flow JP¥100",
+  );
+  await page.getByRole("button", { name: "Income", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Income", exact: true }),
+  ).toHaveAttribute("aria-pressed", "false");
+  await page
+    .getByRole("button", { name: "Cumulative net cash flow", exact: true })
+    .click();
+  await expect(
+    page.getByLabel("Cumulative net cash flow line", { exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Spending", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Spending", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Next month" }).click();
+  await expect(page.getByLabel("Period ending", { exact: true })).toHaveValue(
+    "2034-07",
+  );
+  await expect(page.getByLabel("Breakdown period")).toHaveValue("");
+  await page.reload();
+  await expect(page.getByLabel("Period ending", { exact: true })).toHaveValue(
+    "2034-07",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(
+    page.getByRole("heading", { name: "Where the money goes" }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.getByLabel("Analysis category").selectOption("restaurants");
+  await expect(page.locator(".analysis-merchant")).toContainText(
+    "Analysis cafe",
+  );
+  await page.getByLabel("Period length").selectOption("12");
+  await expect(page.locator(".contributions-panel tbody tr")).toHaveCount(12);
+  await expect(page.getByLabel("Period length")).toHaveValue("12");
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.reload();
+  await expect(page.getByLabel("Period length")).toHaveValue("12");
+  const yearly = await (
+    await page.request.get(
+      "/api/spending-analysis?month=2034-06&currency=JPY&months=12",
+    )
+  ).json();
+  expect(yearly.from).toBe("2033-07-01");
+  expect(yearly.to).toBe("2034-07-01");
+  expect(yearly.months).toHaveLength(12);
+  expect(yearly.investment.contributed).toBe(1200);
+  const single = await (
+    await page.request.get("/api/overview?month=2034-06&currency=JPY&months=1")
+  ).json();
+  expect(single.from).toBe("2034-06-01");
+  expect(single.net_cash_flow).toBe(1850);
+  const six = await (
+    await page.request.get("/api/overview?month=2034-06&currency=JPY&months=6")
+  ).json();
+  expect(six.net_cash_flow).toBe(1950);
+  expect(six.receipt_required_count).toBe(3);
+  for (const months of ["0", "13", "1.5", "invalid"])
+    expect(
+      (
+        await page.request.get(
+          `/api/spending-analysis?month=2034-06&months=${months}`,
+        )
+      ).status(),
+    ).toBe(400);
+  await page.getByLabel("Period length").selectOption("1");
+  await expect(page.locator(".contributions-panel tbody tr")).toHaveCount(1);
+  await expect(page.getByLabel("Analysis category")).toHaveValue("");
+  expect(errors).toEqual([]);
+});
+
+test("uncategorized receipt rows offer popular categories and save only the chosen item", async ({
+  page,
+}) => {
+  const headers = { Origin: "http://127.0.0.1:4318" };
+  const status = await signInOwner(page);
+  await page.goto("/receipts");
+  await page.getByLabel("Receipt files").setInputFiles({
+    name: "quick-categories.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from(receiptText("Rimi", "QUICK-CATEGORIES")),
+  });
+  await page.getByRole("button", { name: "Import receipts" }).click();
+  await page
+    .getByRole("button", { name: /Rimi.*quick-categories.txt/ })
+    .click();
+  await expect(page.getByText("Pesuvahend", { exact: true })).toBeVisible({
+    timeout: 30000,
+  });
+  const receiptId = new URL(page.url()).pathname.split("/").at(-1)!;
+  const getReceipt = async () =>
+    (await page.request.get(`/api/receipts/${receiptId}`)).json();
+  const receipt = await getReceipt();
+  const items = receipt.items.map(
+    (item: { amount: number }, index: number) => ({
+      ...item,
+      amount: (item.amount / 100).toFixed(2),
+      category_id: index < 2 ? "uncategorized" : "health",
+    }),
+  );
+  for (const [index, category] of [
+    "health",
+    "health",
+    "clothing",
+    "clothing",
+    "household",
+  ].entries()) {
+    items.push({
+      description: `Popularity sample ${index}`,
+      amount: "0.00",
+      category_id: category,
+      quantity: null,
+      unit: null,
+    });
+  }
+  const updated = await page.request.post(`/api/receipts/${receiptId}`, {
+    headers,
+    data: { ...receipt, total: "5.10", items },
+  });
+  expect(updated.ok()).toBe(true);
+  if (status.needsSetup)
+    expect(
+      (await getReceipt()).suggested_categories.map(
+        (category: { id: string }) => category.id,
+      ),
+    ).toEqual(["groceries", "health", "clothing", "household"]);
+  expect(
+    (
+      await page.request.post(`/api/receipts/${receiptId}/cash`, { headers })
+    ).ok(),
+  ).toBe(true);
+  await page.reload();
+  const firstChoices = page.getByRole("group", {
+    name: "Quick categories for product 1",
+    exact: true,
+  });
+  await expect(firstChoices.getByRole("button")).toHaveCount(4);
+  await expect(
+    page.getByRole("group", {
+      name: "Quick categories for product 3",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await mkdir(".data/screenshots", { recursive: true });
+  await page.screenshot({
+    path: ".data/screenshots/receipt-quick-categories-desktop.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  expect(
+    await page.locator(".product-table").evaluate((table) => {
+      const container = table.parentElement!;
+      return container.scrollWidth <= container.clientWidth;
+    }),
+  ).toBe(true);
+  await page.screenshot({
+    path: ".data/screenshots/receipt-quick-categories-phone.png",
+    fullPage: true,
+  });
+  await firstChoices
+    .getByRole("button", { name: "Groceries", exact: true })
+    .click();
+  await expect(firstChoices).toHaveCount(0);
+  const saved = await getReceipt();
+  expect(saved.items[0].category_id).toBe("groceries");
+  expect(saved.items[0].manual).toBe(true);
+  expect(saved.items[1].category_id).toBe("uncategorized");
+  expect(saved.items.map((item: { amount: number }) => item.amount)).toEqual(
+    receipt.items
+      .map((item: { amount: number }) => item.amount)
+      .concat([0, 0, 0, 0, 0]),
+  );
+  const payment = await (
+    await page.request.get(`/api/transactions/${saved.links[0].transaction_id}`)
+  ).json();
+  expect(
+    payment.allocations.find(
+      (row: { category_id: string }) => row.category_id === "groceries",
+    ).amount,
+  ).toBe(200);
+  expect(
+    payment.allocations.find(
+      (row: { category_id: string }) => row.category_id === "uncategorized",
+    ).amount,
+  ).toBe(300);
+  expect(
+    (
+      await page.request.post(`/api/receipts/${receiptId}/item-category`, {
+        headers,
+        data: { itemId: randomUUID(), categoryId: "groceries" },
+      })
+    ).status(),
+  ).toBe(404);
+  await page.getByRole("button", { name: "Edit receipt", exact: true }).click();
+  await page
+    .getByRole("group", { name: "Quick categories for product 2", exact: true })
+    .getByRole("button", { name: "Groceries", exact: true })
+    .click();
+  await expect(
+    page.getByLabel("Product category 2", { exact: true }),
+  ).toHaveValue("groceries");
+  expect((await getReceipt()).items[1].category_id).toBe("uncategorized");
+  await page.getByRole("button", { name: "Save and validate" }).click();
+  await expect(
+    page.getByRole("button", { name: "Edit receipt", exact: true }),
+  ).toBeVisible();
+  expect((await getReceipt()).items[1].category_id).toBe("groceries");
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+});
+
+test("invalid receipts can be deleted with confirmation while linked payments remain", async ({
+  page,
+}) => {
+  const headers = { Origin: "http://127.0.0.1:4318" };
+  await signInOwner(page);
+  const upload = async (invalid: boolean) => {
+    const text = receiptText("Rimi", `DELETE-${randomUUID()}`, "01.04.2026");
+    const response = await page.request.post("/api/receipts/upload", {
+      headers,
+      multipart: {
+        files: {
+          name: "delete-receipt.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from(
+            invalid ? text.replace("Kokku 5,10", "Kokku 5,99") : text,
+          ),
+        },
+      },
+    });
+    expect(response.ok()).toBe(true);
+    const id = (await response.json()).results[0].id;
+    await expect
+      .poll(
+        async () =>
+          (await (await page.request.get(`/api/receipts/${id}`)).json()).status,
+        { timeout: 30000 },
+      )
+      .toBe(invalid ? "review" : "ready");
+    return id;
+  };
+  const invalidId = await upload(true);
+  const returnTo = "/receipts?retailer=rimi&page=1";
+  await page.goto(
+    `/receipts/${invalidId}?returnTo=${encodeURIComponent(returnTo)}`,
+  );
+  const button = page.getByRole("button", {
+    name: "Delete receipt",
+    exact: true,
+  });
+  await expect(button).toBeVisible();
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await button.click();
+  expect((await page.request.get(`/api/receipts/${invalidId}`)).ok()).toBe(
+    true,
+  );
+  page.once("dialog", (dialog) => dialog.accept());
+  await button.click();
+  await expect(page).toHaveURL(`http://127.0.0.1:4318${returnTo}`);
+  expect((await page.request.get(`/api/receipts/${invalidId}`)).status()).toBe(
+    404,
+  );
+  expect(
+    (await page.request.get(`/api/receipts/${invalidId}/file`)).status(),
+  ).toBe(404);
+  const linkedId = await upload(false);
+  expect(
+    (
+      await page.request.post(`/api/receipts/${linkedId}/cash`, { headers })
+    ).ok(),
+  ).toBe(true);
+  const linked = await (
+    await page.request.get(`/api/receipts/${linkedId}`)
+  ).json();
+  const paymentId = linked.links[0].transaction_id;
+  const paymentBefore = await (
+    await page.request.get(`/api/transactions/${paymentId}`)
+  ).json();
+  expect(
+    (await page.request.delete(`/api/receipts/${linkedId}`, { headers })).ok(),
+  ).toBe(true);
+  const payment = await page.request.get(`/api/transactions/${paymentId}`);
+  expect(payment.ok()).toBe(true);
+  expect((await payment.json()).amount).toBe(paymentBefore.amount);
+  expect(
+    (
+      await page.request.delete(`/api/receipts/${linkedId}`, { headers })
+    ).status(),
+  ).toBe(404);
+});
+
+test("settings control the inclusive import start date and remove older records", async ({
+  page,
+}) => {
+  const headers = { Origin: "http://127.0.0.1:4318" };
+  await signInOwner(page);
+  expect(
+    (
+      await page.request.post("/api/settings/import-window", {
+        headers,
+        data: { startDate: "2025-01-01" },
+      })
+    ).ok(),
+  ).toBe(true);
+  const createPayment = (date: string) =>
+    page.request.post("/api/transactions", {
+      headers,
+      data: {
+        merchant: "Import cutoff test",
+        amount: "2.00",
+        currency: "EUR",
+        date,
+        category: "groceries",
+        idempotencyKey: randomUUID(),
+      },
+    });
+  const older = await (await createPayment("2025-12-31")).json();
+  const boundary = await (await createPayment("2026-01-01")).json();
+  await page.goto("/receipts");
+  await page.getByLabel("Receipt files").setInputFiles({
+    name: "cutoff-old.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from(receiptText("Rimi", "E2E-CUTOFF", "31.12.2025")),
+  });
+  await page.getByRole("button", { name: "Import receipts" }).click();
+  await page.getByRole("button", { name: /Rimi.*cutoff-old.txt/ }).click();
+  await expect(page.getByText("Pesuvahend", { exact: true })).toBeVisible({
+    timeout: 30000,
+  });
+  const receiptId = new URL(page.url()).pathname.split("/").at(-1)!;
+  await page.goto("/settings");
+  await expect(
+    page.getByLabel("Import start date", { exact: true }),
+  ).toHaveValue("2025-01-01");
+  await page
+    .getByLabel("Import start date", { exact: true })
+    .fill("2026-01-01");
+  await page
+    .getByRole("button", { name: "Save start date", exact: true })
+    .click();
+  await expect(page.getByRole("status")).toContainText(
+    "Import start date saved.",
+  );
+  expect(
+    (await (await page.request.get("/api/settings")).json()).importStartDate,
+  ).toBe("2026-01-01");
+  expect(
+    (await page.request.get(`/api/transactions/${older.id}`)).status(),
+  ).toBe(404);
+  expect(
+    (await page.request.get(`/api/transactions/${boundary.id}`)).ok(),
+  ).toBe(true);
+  expect((await page.request.get(`/api/receipts/${receiptId}`)).status()).toBe(
+    404,
+  );
+  expect((await createPayment("2025-12-31")).status()).toBe(400);
+  const uploaded = await page.request.post("/api/receipts/upload", {
+    headers,
+    multipart: {
+      files: {
+        name: "cutoff-repeat.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from(receiptText("Rimi", "E2E-CUTOFF", "31.12.2025")),
+      },
+    },
+  });
+  expect(uploaded.ok()).toBe(true);
+  const result = await uploaded.json();
+  await expect
+    .poll(
+      async () =>
+        (
+          await page.request.get(`/api/receipts/${result.results[0].id}`)
+        ).status(),
+      { timeout: 30000 },
+    )
+    .toBe(404);
+  expect(
+    (
+      await page.request.post("/api/settings/import-window", {
+        headers,
+        data: { startDate: "2026-02-30" },
+      })
+    ).status(),
+  ).toBe(400);
+  expect(
+    (await (await page.request.get("/api/settings")).json()).importStartDate,
+  ).toBe("2026-01-01");
+});
+
+test("merchant groups can be created, edited and undone in Settings", async ({
+  page,
+}) => {
+  await page.context().addCookies(ownerCookies);
+  const headers = { Origin: "http://127.0.0.1:4318" };
+  for (const merchant of ["Alias Branch One", "Alias Branch Two"]) {
+    const response = await page.request.post("/api/transactions", {
+      headers,
+      data: {
+        merchant,
+        amount: "2.00",
+        currency: "EUR",
+        date: "2026-10-05",
+        category: "groceries",
+        kind: "expense",
+        idempotencyKey: randomUUID(),
+      },
+    });
+    expect(response.ok()).toBe(true);
+  }
+  await page.goto("/settings");
+  await expect(
+    page.getByRole("button", { name: "Edit Wolt", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Edit Selver", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Group merchants", exact: true })
+    .click();
+  await page.getByLabel("Display name", { exact: true }).fill("Alias Company");
+  await page.getByLabel("Find imported names").fill("Alias Branch");
+  await page.getByLabel("Alias Branch One", { exact: true }).check();
+  await page.getByLabel("Alias Branch Two", { exact: true }).check();
+  await page.getByRole("button", { name: "Save group", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Edit Alias Company", exact: true }),
+  ).toBeVisible();
+  let search = await (
+    await page.request.get(
+      "/api/transactions?history=true&search=Alias%20Company",
+    )
+  ).json();
+  expect(search.count).toBe(2);
+  expect(
+    search.rows.every(
+      (row: { merchant_group: string }) =>
+        row.merchant_group === "Alias Company",
+    ),
+  ).toBe(true);
+  const detail = await (
+    await page.request.get(`/api/transactions/${search.rows[0].id}`)
+  ).json();
+  expect(detail.merchant).toMatch(/^Alias Branch /);
+  await page
+    .getByRole("button", { name: "Edit Alias Company", exact: true })
+    .click();
+  await page
+    .getByLabel("Display name", { exact: true })
+    .fill("Renamed Alias Company");
+  await page.getByRole("button", { name: "Save group", exact: true }).click();
+  await expect(
+    page.getByRole("button", {
+      name: "Edit Renamed Alias Company",
+      exact: true,
+    }),
+  ).toBeVisible();
+  const conflict = await page.request.post("/api/merchants", {
+    headers,
+    data: { name: "Another group", aliases: ["ALIAS BRANCH ONE"] },
+  });
+  expect(conflict.status()).toBe(409);
+  await page
+    .getByRole("button", { name: "Ungroup Renamed Alias Company", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", {
+      name: "Edit Renamed Alias Company",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  search = await (
+    await page.request.get(
+      "/api/transactions?history=true&search=Renamed%20Alias%20Company",
+    )
+  ).json();
+  expect(search.count).toBe(0);
+  search = await (
+    await page.request.get(
+      "/api/transactions?history=true&search=Alias%20Branch",
+    )
+  ).json();
+  expect(search.count).toBe(2);
+});
+
+test("mobile navigation, compact filters and sheets keep phone workflows usable", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const headers = { Origin: "http://127.0.0.1:4318" };
+  const status = await signInOwner(page);
+  const prefix = `Mobile purchase ${randomUUID().slice(0, 8)}`;
+  const date = "2040-01-15";
+  for (const [suffix, category] of [
+    ["A long merchant name for testing narrow phone screens", "groceries"],
+    ["Subscription", "subscriptions"],
+  ]) {
+    const created = await page.request.post("/api/transactions", {
+      headers,
+      data: {
+        merchant: `${prefix} ${suffix}`,
+        amount: "12.34",
+        currency: "EUR",
+        date,
+        category,
+        kind: "expense",
+        idempotencyKey: randomUUID(),
+      },
+    });
+    expect(created.ok()).toBe(true);
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(
+    `/transactions?month=2040-01&currency=EUR&search=${encodeURIComponent(prefix)}`,
+  );
+  const navigation = page.getByRole("navigation", {
+    name: "Mobile navigation",
+    exact: true,
+  });
+  await expect(navigation).toBeVisible();
+  await expect(
+    navigation.getByRole("button", { name: "Transactions", exact: true }),
+  ).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(".entry-table tbody tr")).toHaveCount(2);
+  await expect(page.getByLabel("Filter category")).toBeHidden();
+  await expect(
+    page.getByRole("button", { name: "Require receipts", exact: true }),
+  ).toBeHidden();
+  expect(
+    await page
+      .locator(".entry-table tbody tr")
+      .first()
+      .evaluate((row) => row.getBoundingClientRect().top),
+  ).toBeLessThan(500);
+  expect(
+    await page
+      .getByLabel("Search transactions")
+      .evaluate((input) => getComputedStyle(input).fontSize),
+  ).toBe("16px");
+  await page.getByRole("button", { name: "Filters", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Filters", exact: true }),
+  ).toHaveAttribute("aria-expanded", "true");
+  await page.getByLabel("Filter category").selectOption("groceries");
+  await page.getByRole("button", { name: "Show results", exact: true }).click();
+  await expect(page.getByLabel("Filter category")).toBeHidden();
+  await expect(page.locator(".entry-table tbody tr")).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: "Remove category filter" }),
+  ).toBeVisible();
+  const listUrl = page.url();
+  await page.locator(".entry-table .merchant-link").first().click();
+  await expect(
+    page.getByRole("heading", { name: "Transaction details" }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "All transactions", exact: true })
+    .click();
+  await expect(page).toHaveURL(listUrl);
+  await expect(
+    page.getByRole("button", { name: "Remove category filter" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Remove category filter" }).click();
+  await expect(page.locator(".entry-table tbody tr")).toHaveCount(2);
+  const selection = page.locator(".entry-table input[type=checkbox]").first();
+  await selection.check();
+  await expect(
+    page.getByRole("button", { name: "Require receipts", exact: true }),
+  ).toBeVisible();
+  await selection.uncheck();
+  await expect(
+    page.getByRole("button", { name: "Require receipts", exact: true }),
+  ).toBeHidden();
+  await navigation.getByRole("button", { name: "More", exact: true }).click();
+  const drawer = page.getByRole("dialog", { name: "Navigation", exact: true });
+  await expect(drawer).toBeVisible();
+  expect(await page.evaluate(() => document.body.style.overflow)).toBe(
+    "hidden",
+  );
+  await page.getByRole("button", { name: "Sign out", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("button", { name: "Close menu", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(drawer).toHaveCount(0);
+  await expect(
+    navigation.getByRole("button", { name: "More", exact: true }),
+  ).toBeFocused();
+  expect(await page.evaluate(() => document.body.style.overflow)).toBe("");
+  await page.getByRole("button", { name: "Cash entry", exact: true }).click();
+  const dialog = page.getByRole("dialog", {
+    name: "Record a cash entry",
+    exact: true,
+  });
+  await expect(dialog.getByLabel("Merchant or description")).toBeFocused();
+  expect(
+    await dialog.evaluate((element) =>
+      Math.round(element.getBoundingClientRect().bottom),
+    ),
+  ).toBe(844);
+  await dialog
+    .getByRole("button", { name: "Record entry", exact: true })
+    .focus();
+  await page.keyboard.press("Tab");
+  await expect(
+    dialog.getByRole("button", { name: "Close cash entry", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Cash entry", exact: true }),
+  ).toBeFocused();
+  await page.getByRole("button", { name: "Cash entry", exact: true }).click();
+  await dialog
+    .getByLabel("Merchant or description")
+    .fill(`${prefix} Cash entry`);
+  await dialog.getByLabel("Amount", { exact: true }).fill("4.50");
+  await dialog.getByLabel("Date", { exact: true }).fill(date);
+  await dialog
+    .getByRole("button", { name: "Record entry", exact: true })
+    .click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator(".entry-table tbody tr")).toHaveCount(3);
+  await mkdir(".data/screenshots", { recursive: true });
+  for (const width of [320, 390, 768]) {
+    await page.setViewportSize({ width, height: 844 });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    const amounts = await page
+      .locator(".entry-amount")
+      .evaluateAll((elements) =>
+        elements.map((element) => ({
+          left: element.getBoundingClientRect().left,
+          right: element.getBoundingClientRect().right,
+        })),
+      );
+    expect(amounts.every((rect) => rect.left >= 0 && rect.right <= width)).toBe(
+      true,
+    );
+    if (width === 390)
+      await page.screenshot({
+        path: ".data/screenshots/mobile-transactions.png",
+      });
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Cash entry", exact: true }).click();
+  await page.screenshot({ path: ".data/screenshots/mobile-cash-entry.png" });
+  await page.keyboard.press("Escape");
+  await navigation
+    .getByRole("button", { name: "Receipts", exact: true })
+    .click();
+  await page.getByLabel("Receipt files").setInputFiles({
+    name: `${prefix}.txt`,
+    mimeType: "text/plain",
+    buffer: Buffer.from(receiptText("Rimi", prefix, "15.01.2040")),
+  });
+  await page
+    .getByRole("button", { name: "Import receipts", exact: true })
+    .click();
+  const receipt = page
+    .locator(".receipt-table tbody tr")
+    .filter({ hasText: prefix });
+  await expect(receipt).toBeVisible({ timeout: 30000 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({ path: ".data/screenshots/mobile-receipts.png" });
+  await receipt.getByRole("button").click();
+  await expect(page.locator(".product-table tbody tr")).toHaveCount(3, {
+    timeout: 30000,
+  });
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    expect(
+      await page
+        .locator(".product-table")
+        .evaluate(
+          (table) =>
+            table.parentElement!.scrollWidth <=
+            table.parentElement!.clientWidth,
+        ),
+    ).toBe(true);
+  }
+  await page.screenshot({
+    path: ".data/screenshots/mobile-receipt-details.png",
+    fullPage: true,
+  });
+  await navigation.getByRole("button", { name: "More", exact: true }).click();
+  await drawer.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Merchants", exact: true }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 320, height: 740 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await navigation
+    .getByRole("button", { name: "Overview", exact: true })
+    .click();
+  await expect(page.locator(".metric-grid")).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: ".data/screenshots/mobile-overview.png" });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(
+    `/transactions?month=2040-01&currency=EUR&search=${encodeURIComponent(prefix)}`,
+  );
+  await expect(navigation).toBeHidden();
+  await expect(page.getByLabel("Filter category")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Filters", exact: true }),
+  ).toBeHidden();
+  await page.screenshot({ path: ".data/screenshots/desktop-transactions.png" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await navigation.getByRole("button", { name: "More", exact: true }).click();
+  await drawer.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Sign in", exact: true }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => document.body.style.overflow)).toBe("");
+  expect(errors).toEqual([]);
+});
+
+test("double-entry journals and opening balances remain balanced through the UI", async ({
+  page,
+}) => {
+  await signInOwner(page);
+  const response = await page.request.post("/api/transactions", {
+    headers: { Origin: "http://127.0.0.1:4318" },
+    data: {
+      merchant: "Accounting regression purchase",
+      date: "2026-01-02",
+      amount: "25.00",
+      currency: "EUR",
+      category: "groceries",
+      idempotencyKey: randomUUID(),
+    },
+  });
+  expect(response.ok()).toBe(true);
+  const entry = await response.json();
+  const before = await (
+    await page.request.get("/api/accounting/trial-balance?currency=EUR")
+  ).json();
+  const cash = before.accounts.find(
+    (account: { code: string }) => account.code === "cash:EUR",
+  );
+  expect(before.debit).toBe(before.credit);
+  try {
+    await page.goto(`/transactions/${entry.id}`);
+    await page.getByText("Journal postings", { exact: true }).click();
+    const journal = page.locator("details").filter({
+      has: page.locator("summary", { hasText: "Journal postings" }),
+    });
+    await expect(
+      journal.getByRole("columnheader", { name: "Debit", exact: true }),
+    ).toBeVisible();
+    await expect(
+      journal.getByRole("row").filter({ hasText: "Groceries" }),
+    ).toContainText("€25.00");
+    await expect(
+      journal.getByRole("row").filter({ hasText: "Cash" }),
+    ).toContainText("€25.00");
+    await page.goto("/settings");
+    const panel = page.locator("section").filter({
+      has: page.getByRole("heading", { name: "Accounting", exact: true }),
+    });
+    const row = panel
+      .getByRole("row")
+      .filter({ has: page.getByRole("cell", { name: "Cash", exact: true }) });
+    await row.getByRole("button", { name: "Edit opening balance" }).click();
+    await panel
+      .getByLabel("Opening balance (EUR)", { exact: true })
+      .fill("100.00");
+    await panel.getByLabel("Date", { exact: true }).fill("2026-01-01");
+    await panel.getByRole("button", { name: "Save opening balance" }).click();
+    await expect(page.getByRole("status")).toHaveText("Opening balance saved.");
+    await expect(
+      panel.getByRole("row").filter({
+        has: page.getByRole("cell", {
+          name: "Opening balances",
+          exact: true,
+        }),
+      }),
+    ).toContainText("€100.00 Cr");
+    const after = await (
+      await page.request.get("/api/accounting/trial-balance?currency=EUR")
+    ).json();
+    expect(
+      after.accounts.find((account: { id: string }) => account.id === cash.id)
+        .balance,
+    ).toBe(cash.balance - cash.opening_balance + 10000);
+    expect(after.debit).toBe(after.credit);
+    const invalid = await page.request.post("/api/accounting/opening-balance", {
+      headers: { Origin: "http://127.0.0.1:4318" },
+      data: { accountId: cash.id, amount: "10.00", date: "2099-01-01" },
+    });
+    expect(invalid.status()).toBe(400);
+  } finally {
+    await page.request.post("/api/accounting/opening-balance", {
+      headers: { Origin: "http://127.0.0.1:4318" },
+      data: {
+        accountId: cash.id,
+        amount: decimalMoney(cash.opening_balance, "EUR"),
+        date: cash.opening_date || "2026-01-01",
+      },
+    });
+    await page.request.delete(`/api/transactions/${entry.id}`, {
+      headers: { Origin: "http://127.0.0.1:4318" },
+    });
+  }
 });
