@@ -79,6 +79,17 @@ export async function migrate() {
           ),
         );
       }
+      if (
+        !(await db.query("SELECT 1 FROM schema_migrations WHERE version=4"))
+          .rowCount
+      ) {
+        await db.query(
+          await readFile(
+            path.resolve("migrations/004-manual-journals.sql"),
+            "utf8",
+          ),
+        );
+      }
     }).catch((error) => {
       globalDb.expenseMigration = undefined;
       throw error;

@@ -2399,7 +2399,7 @@ test("double-entry journals and opening balances remain balanced through the UI"
     await expect(
       journal.getByRole("row").filter({ hasText: "Cash" }),
     ).toContainText("€25.00");
-    await page.goto("/settings");
+    await page.goto("/advanced/accounts");
     const panel = page.locator("section").filter({
       has: page.getByRole("heading", { name: "Accounting", exact: true }),
     });
@@ -2447,4 +2447,206 @@ test("double-entry journals and opening balances remain balanced through the UI"
       headers: { Origin: "http://127.0.0.1:4318" },
     });
   }
+});
+
+test("advanced bookkeeping creates accounts, posts and edits split journals, and exposes ledger reports", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await signInOwner(page);
+  await page.goto("/");
+  await page
+    .locator(".sidebar")
+    .getByRole("button", { name: "Advanced", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Advanced bookkeeping", exact: true }),
+  ).toBeVisible();
+  const menu = page.getByRole("navigation", {
+    name: "Advanced bookkeeping",
+    exact: true,
+  });
+  await menu.getByRole("button", { name: "Accounts", exact: true }).click();
+  for (const [code, name, type] of [
+    ["1101", "Advanced wallet", "asset"],
+    ["3101", "Advanced owner equity", "equity"],
+    ["6101", "Advanced fee", "expense"],
+  ]) {
+    await page
+      .getByRole("button", { name: "New account", exact: true })
+      .click();
+    await page.getByLabel("Account code", { exact: true }).fill(code);
+    await page.getByLabel("Account name", { exact: true }).fill(name);
+    await page
+      .getByRole("combobox", { name: "Account type", exact: true })
+      .selectOption(type);
+    await page
+      .getByRole("button", { name: "Create account", exact: true })
+      .click();
+    await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
+  }
+  const accounts = (
+    await (
+      await page.request.get("/api/accounting/trial-balance?currency=EUR")
+    ).json()
+  ).accounts;
+  const wallet = accounts.find(
+    (a: { display_code: string }) => a.display_code === "1101",
+  );
+  const equity = accounts.find(
+    (a: { display_code: string }) => a.display_code === "3101",
+  );
+  const fee = accounts.find(
+    (a: { display_code: string }) => a.display_code === "6101",
+  );
+  expect(
+    (
+      await page.request.post("/api/accounting/accounts", {
+        headers: { Origin: "http://127.0.0.1:4318" },
+        data: {
+          code: "1101",
+          name: "Advanced USD wallet",
+          type: "asset",
+          currency: "USD",
+        },
+      })
+    ).status(),
+  ).toBe(201);
+  await menu.getByRole("button", { name: "Journal", exact: true }).click();
+  await page
+    .getByRole("button", { name: "New journal entry", exact: true })
+    .click();
+  await page.getByLabel("Date", { exact: true }).fill("2026-01-15");
+  await page
+    .getByLabel("Description", { exact: true })
+    .fill("Advanced funding");
+  await page.getByLabel("Reference", { exact: true }).fill("ADV-1");
+  await page
+    .getByRole("combobox", { name: "Account 1", exact: true })
+    .selectOption(wallet.id);
+  await page.getByLabel("Debit 1", { exact: true }).fill("100.00");
+  await page
+    .getByRole("combobox", { name: "Account 2", exact: true })
+    .selectOption(equity.id);
+  await page.getByLabel("Credit 2", { exact: true }).fill("90.00");
+  await expect(
+    page.getByRole("button", { name: "Post journal", exact: true }),
+  ).toBeDisabled();
+  await page.getByLabel("Credit 2", { exact: true }).fill("102.50");
+  await page.getByRole("button", { name: "Add line", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: "Account 3", exact: true })
+    .selectOption(fee.id);
+  await page.getByLabel("Debit 3", { exact: true }).fill("2.50");
+  await page.getByLabel("Memo 3", { exact: true }).fill("Initial fee");
+  await expect(page.locator(".journal-totals")).toContainText("Balanced");
+  await page.getByRole("button", { name: "Post journal", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Advanced funding", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Initial fee", { exact: true })).toBeVisible();
+  const entryId = new URL(page.url()).searchParams.get("entry");
+  expect(entryId).not.toBe("new");
+  await page.getByRole("button", { name: "Edit journal", exact: true }).click();
+  await page
+    .getByLabel("Description", { exact: true })
+    .fill("Adjusted advanced funding");
+  await page.getByLabel("Debit 1", { exact: true }).fill("120.00");
+  await page.getByLabel("Credit 2", { exact: true }).fill("122.50");
+  await page.getByRole("button", { name: "Save journal", exact: true }).click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Adjusted advanced funding",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Advanced wallet", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "General ledger", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".bookkeeping-summary")).toContainText(
+    "€120.00 Dr",
+  );
+  await expect(
+    page.getByRole("button", {
+      name: "Adjusted advanced funding",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByRole("combobox", { name: "Currency", exact: true })
+    .selectOption("USD");
+  await expect(
+    page.getByRole("heading", { name: "Choose a ledger account", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("combobox", { name: "Currency", exact: true })
+    .selectOption("EUR");
+  await page
+    .getByRole("combobox", { name: "Ledger account", exact: true })
+    .selectOption(wallet.id);
+  await page.getByRole("button", { name: "All history", exact: true }).click();
+  await expect(page.locator(".bookkeeping-summary")).toContainText(
+    "€120.00 Dr",
+  );
+  await page.getByLabel("From", { exact: true }).fill("2026-01-16");
+  await page.getByLabel("Through", { exact: true }).fill("2026-01-31");
+  await page
+    .getByRole("button", { name: "Apply filters", exact: true })
+    .click();
+  await expect(
+    page.getByText("No postings in this period.", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".bookkeeping-summary")).toContainText(
+    "Opening €120.00 Dr",
+  );
+  await menu
+    .getByRole("button", { name: "Trial balance", exact: true })
+    .click();
+  await page.getByLabel("As of", { exact: true }).fill("2026-01-31");
+  await page.getByRole("button", { name: "Apply date", exact: true }).click();
+  await expect(
+    page.getByRole("row").filter({
+      has: page.getByRole("button", { name: "Advanced wallet", exact: true }),
+    }),
+  ).toContainText("€120.00");
+  await menu
+    .getByRole("button", { name: "Financial statements", exact: true })
+    .click();
+  await page.getByLabel("From", { exact: true }).fill("2026-01-01");
+  await page.getByLabel("Through", { exact: true }).fill("2026-01-31");
+  await page
+    .getByRole("button", { name: "Apply filters", exact: true })
+    .click();
+  const income = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "Income statement", exact: true }),
+  });
+  await expect(
+    income.getByRole("row").filter({
+      has: page.getByRole("cell", { name: "Advanced fee", exact: true }),
+    }),
+  ).toContainText("€2.50");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(
+    menu.getByRole("button", { name: "Journal", exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(() => document.body.scrollWidth <= window.innerWidth),
+  ).toBe(true);
+  await page.goto(`/advanced/journal?entry=${entryId}`);
+  await expect(
+    page.getByRole("button", { name: "Edit journal", exact: true }),
+  ).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page
+    .getByRole("button", { name: "Delete journal", exact: true })
+    .click();
+  await expect(page.getByRole("status")).toHaveText("Manual journal deleted.");
+  expect(
+    (await page.request.get(`/api/accounting/journals/${entryId}`)).status(),
+  ).toBe(404);
+  expect(errors).toEqual([]);
 });

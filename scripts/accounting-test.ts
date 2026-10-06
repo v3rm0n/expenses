@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { isolatedDatabase } from "./test-database";
 import { CATEGORY_SEEDS } from "../src/lib/types";
+import { randomUUID } from "node:crypto";
+import type { JournalInput } from "../src/lib/accounting";
 
 const database = await isolatedDatabase("accounting");
 process.env.DATABASE_URL = database.url;
@@ -11,6 +13,16 @@ const { trialBalance, transactionJournal, setOpeningBalance } =
 const { overview } = await import("../src/server/reporting");
 const { importBankTransactions } = await import("../src/server/banking");
 const { replaceAllocations } = await import("../src/server/ledger");
+const {
+  createAccountingAccount,
+  createManualJournal,
+  updateManualJournal,
+  deleteManualJournal,
+  journalDetail,
+  journalPage,
+  generalLedger,
+  financialStatements,
+} = await import("../src/server/bookkeeping");
 let checks = 0;
 const check = async (name: string, fn: () => Promise<void>) => {
   await fn();
@@ -301,6 +313,374 @@ try {
       assert.equal(
         dollars.accounts.find((a) => a.code === `bank:${bank.id}:USD`)?.balance,
         -99,
+      );
+    },
+  );
+  const manualAsset = await createAccountingAccount({
+    code: "1100",
+    name: "Manual wallet",
+    type: "asset",
+    currency: "EUR",
+  });
+  const manualLiability = await createAccountingAccount({
+    code: "2100",
+    name: "Loan payable",
+    type: "liability",
+    currency: "EUR",
+  });
+  const manualExpense = await createAccountingAccount({
+    code: "6100",
+    name: "Manual costs",
+    type: "expense",
+    currency: "EUR",
+  });
+  const manualIncome = await createAccountingAccount({
+    code: "4100",
+    name: "Manual revenue",
+    type: "income",
+    currency: "EUR",
+  });
+  const loanInput: JournalInput = {
+    currency: "EUR",
+    date: "2026-01-15",
+    description: "Manual loan",
+    reference: "LN-1",
+    notes: "Initial funding",
+    postings: [
+      {
+        accountId: manualAsset.id,
+        debit: "100.00",
+        credit: "0",
+        memo: "Funds received",
+      },
+      {
+        accountId: manualLiability.id,
+        debit: "0",
+        credit: "100.00",
+        memo: "Amount owed",
+      },
+    ],
+  };
+  const loanKey = randomUUID();
+  const loan = await createManualJournal(loanInput, loanKey);
+  await check(
+    "manual journals post atomically, preserve memos, and deduplicate retries",
+    async () => {
+      assert.equal(loan.journal.origin, "manual");
+      assert.equal(loan.journal.debit, 10000);
+      assert.equal(loan.journal.credit, 10000);
+      assert.equal(loan.postings[0].memo, "Funds received");
+      await assert.rejects(
+        createManualJournal(
+          {
+            ...loanInput,
+            postings: [
+              { ...loanInput.postings[0], debit: "100.001" },
+              loanInput.postings[1],
+            ],
+          },
+          randomUUID(),
+        ),
+        (error: unknown) =>
+          (error as { status: number }).status === 400 &&
+          /decimal places/.test((error as Error).message),
+      );
+      const repeated = await Promise.all([
+        createManualJournal(loanInput, loanKey),
+        createManualJournal(loanInput, loanKey),
+      ]);
+      assert.ok(repeated.every((j) => j.journal.id === loan.journal.id));
+      await assert.rejects(
+        createManualJournal(
+          { ...loanInput, description: "Different" },
+          loanKey,
+        ),
+        /already used/,
+      );
+      const before = (
+        await query("SELECT count(*)::int AS count FROM journal_entries")
+      )[0].count;
+      await assert.rejects(
+        createManualJournal(
+          {
+            ...loanInput,
+            postings: [
+              {
+                accountId: manualAsset.id,
+                debit: "100.01",
+                credit: "0",
+                memo: "",
+              },
+              loanInput.postings[1],
+            ],
+          },
+          randomUUID(),
+        ),
+        /equal total credits/,
+      );
+      await assert.rejects(
+        createManualJournal(
+          {
+            ...loanInput,
+            postings: [
+              { ...loanInput.postings[0], credit: "1.00" },
+              loanInput.postings[1],
+            ],
+          },
+          randomUUID(),
+        ),
+        /positive debit or/,
+      );
+      const [usdAccount] = await query(
+        "SELECT id FROM ledger_accounts WHERE currency='USD' LIMIT 1",
+      );
+      await assert.rejects(
+        createManualJournal(
+          {
+            ...loanInput,
+            postings: [
+              { ...loanInput.postings[0], accountId: usdAccount.id },
+              loanInput.postings[1],
+            ],
+          },
+          randomUUID(),
+        ),
+        /journal currency/,
+      );
+      assert.equal(
+        (await query("SELECT count(*)::int AS count FROM journal_entries"))[0]
+          .count,
+        before,
+      );
+      await assert.rejects(
+        createAccountingAccount({
+          code: "1100",
+          name: "Duplicate",
+          type: "asset",
+          currency: "EUR",
+        }),
+        /already exists/,
+      );
+      await createAccountingAccount({
+        code: "1100",
+        name: "USD wallet",
+        type: "asset",
+        currency: "USD",
+      });
+    },
+  );
+  await createManualJournal(
+    {
+      ...loanInput,
+      date: "2026-02-02",
+      description: "Split manual cost",
+      reference: "COST-1",
+      postings: [
+        {
+          accountId: manualExpense.id,
+          debit: "15.00",
+          credit: "0",
+          memo: "First cost",
+        },
+        {
+          accountId: manualExpense.id,
+          debit: "10.00",
+          credit: "0",
+          memo: "Second cost",
+        },
+        {
+          accountId: manualAsset.id,
+          debit: "0",
+          credit: "25.00",
+          memo: "Payment",
+        },
+      ],
+    },
+    randomUUID(),
+  );
+  await createManualJournal(
+    {
+      ...loanInput,
+      date: "2026-02-10",
+      description: "Manual income",
+      postings: [
+        {
+          accountId: manualAsset.id,
+          debit: "60.00",
+          credit: "0",
+          memo: "Income",
+        },
+        {
+          accountId: manualIncome.id,
+          debit: "0",
+          credit: "60.00",
+          memo: "Revenue",
+        },
+      ],
+    },
+    randomUUID(),
+  );
+  await check(
+    "general ledger opens with earlier history and reports exact running and closing balances",
+    async () => {
+      const ledger = await generalLedger(manualAsset.id, {
+        from: "2026-02-01",
+        to: "2026-02-28",
+      });
+      assert.equal(ledger.opening, 10000);
+      assert.equal(ledger.closing, 13500);
+      assert.equal(ledger.debit, 6000);
+      assert.equal(ledger.credit, 2500);
+      assert.deepEqual(
+        ledger.rows.map((r) => r.balance),
+        [7500, 13500],
+      );
+      assert.equal(
+        (
+          await journalPage({
+            currency: "EUR",
+            origin: "manual",
+            search: "COST-1",
+          })
+        ).count,
+        1,
+      );
+      await assert.rejects(
+        generalLedger(manualAsset.id, { from: "2026-03-01", to: "2026-02-01" }),
+        /Start date/,
+      );
+      await assert.rejects(
+        setOpeningBalance(manualAsset.id, 100, "2026-02-01"),
+        /on or before/,
+      );
+    },
+  );
+  await check(
+    "trial balance and financial statements include manual asset, liability, income, and expense postings",
+    async () => {
+      const trial = await trialBalance("EUR", "2026-02-28");
+      assert.equal(trial.balance_debit, trial.balance_credit);
+      assert.equal(
+        trial.accounts.find((a) => a.id === manualAsset.id)?.balance,
+        13500,
+      );
+      assert.equal(
+        trial.accounts.find((a) => a.id === manualLiability.id)?.balance,
+        -10000,
+      );
+      const statement = await financialStatements(
+        "EUR",
+        "2026-02-01",
+        "2026-02-28",
+      );
+      assert.equal(statement.income, 6000);
+      assert.equal(statement.expenses, 2500);
+      assert.equal(statement.profit, 3500);
+      assert.equal(
+        statement.assets,
+        statement.liabilities + statement.equity + statement.earnings,
+      );
+      assert.equal((await overview("2026-02", "EUR")).spending, 0);
+    },
+  );
+  await check(
+    "pagination retains the full period totals and running balance across pages",
+    async () => {
+      for (let i = 0; i < 51; i++)
+        await createManualJournal(
+          {
+            ...loanInput,
+            date: "2026-03-01",
+            description: `Pagination ${i}`,
+            postings: [
+              {
+                accountId: manualAsset.id,
+                debit: "0.01",
+                credit: "0",
+                memo: "",
+              },
+              {
+                accountId: manualLiability.id,
+                debit: "0",
+                credit: "0.01",
+                memo: "",
+              },
+            ],
+          },
+          randomUUID(),
+        );
+      const first = await generalLedger(manualAsset.id, {
+        from: "2026-03-01",
+        to: "2026-03-31",
+        page: 1,
+      });
+      const second = await generalLedger(manualAsset.id, {
+        from: "2026-03-01",
+        to: "2026-03-31",
+        page: 2,
+      });
+      assert.equal(first.count, 51);
+      assert.equal(first.rows.length, 50);
+      assert.equal(second.rows.length, 1);
+      assert.equal(first.rows[49].balance, 13550);
+      assert.equal(second.rows[0].balance, 13551);
+      assert.equal(first.closing, 13551);
+      assert.equal(second.closing, 13551);
+      const journals = await journalPage({
+        currency: "EUR",
+        origin: "manual",
+        from: "2026-03-01",
+        to: "2026-03-31",
+        page: 2,
+      });
+      assert.equal(journals.count, 51);
+      assert.equal(journals.rows.length, 1);
+    },
+  );
+  await check(
+    "manual edits reject stale versions and imported journals, and deletion removes only manual postings",
+    async () => {
+      const changed = await updateManualJournal(
+        loan.journal.id,
+        {
+          ...loanInput,
+          reference: "LN-2",
+          postings: loanInput.postings.map((p) => ({
+            ...p,
+            debit: p.debit === "0" ? "0" : "110.00",
+            credit: p.credit === "0" ? "0" : "110.00",
+          })),
+        },
+        loan.journal.version,
+      );
+      assert.equal(changed.journal.version, 2);
+      assert.equal(changed.journal.debit, 11000);
+      await assert.rejects(
+        updateManualJournal(loan.journal.id, loanInput, 1),
+        /changed since/,
+      );
+      await assert.rejects(
+        deleteManualJournal(loan.journal.id, 1),
+        /changed since/,
+      );
+      const source = await transactionJournal(purchase.id);
+      await assert.rejects(
+        updateManualJournal(source.journal!.id, loanInput, 1),
+        /Only manual/,
+      );
+      await assert.rejects(
+        deleteManualJournal(source.journal!.id, 1),
+        /Only manual/,
+      );
+      await deleteManualJournal(loan.journal.id, changed.journal.version);
+      await assert.rejects(journalDetail(loan.journal.id), /not found/);
+      assert.equal(
+        (
+          await query("SELECT id FROM journal_postings WHERE entry_id=$1", [
+            loan.journal.id,
+          ])
+        ).length,
+        0,
       );
     },
   );

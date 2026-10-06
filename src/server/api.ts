@@ -28,6 +28,17 @@ import {
   setOpeningBalance,
 } from "./accounting";
 import {
+  journalPage,
+  journalDetail,
+  createManualJournal,
+  updateManualJournal,
+  deleteManualJournal,
+  createAccountingAccount,
+  generalLedger,
+  financialStatements,
+} from "./bookkeeping";
+import { ACCOUNT_TYPES } from "../lib/accounting";
+import {
   addSession,
   assertOrigin,
   createOwner,
@@ -122,6 +133,26 @@ const receiptItemInput = z.object({
   quantity: z.string().max(40).nullable().optional(),
   unit: z.string().max(30).nullable().optional(),
 });
+const manualJournalInput = z.object({
+  currency: currencyInput,
+  date: dateInput,
+  description: z.string().trim().min(1).max(300),
+  reference: z.string().trim().max(100).default(""),
+  notes: z.string().trim().max(4000).default(""),
+  postings: z
+    .array(
+      z
+        .object({
+          accountId: z.uuid(),
+          debit: moneyInput.default("0"),
+          credit: moneyInput.default("0"),
+          memo: z.string().trim().max(500).default(""),
+        })
+        .strict(),
+    )
+    .min(2)
+    .max(100),
+});
 
 export async function handleApi(
   request: NextRequest,
@@ -190,6 +221,94 @@ export async function handleApi(
     }
     if (route === "state" && method === "GET")
       return json(await applicationState());
+    if (route === "accounting/accounts" && method === "POST") {
+      const input = z
+        .object({
+          code: z
+            .string()
+            .trim()
+            .regex(/^[A-Za-z0-9._-]{1,40}$/),
+          name: z.string().trim().min(1).max(200),
+          type: z.enum(ACCOUNT_TYPES),
+          currency: currencyInput,
+        })
+        .strict()
+        .parse(await request.json());
+      return json(await createAccountingAccount(input), 201);
+    }
+    if (route === "accounting/journals" && method === "GET")
+      return json(
+        await journalPage({
+          currency: currencyInput.parse(params.get("currency") || "EUR"),
+          from: params.has("from")
+            ? dateInput.parse(params.get("from"))
+            : undefined,
+          to: params.has("to") ? dateInput.parse(params.get("to")) : undefined,
+          origin: z
+            .enum(["all", "manual", "transaction", "opening"])
+            .parse(params.get("origin") || "all"),
+          search: z
+            .string()
+            .max(200)
+            .parse(params.get("search") || ""),
+          page: z.coerce
+            .number()
+            .int()
+            .min(1)
+            .parse(params.get("page") || 1),
+        }),
+      );
+    if (route === "accounting/journals" && method === "POST") {
+      const input = manualJournalInput
+        .extend({ idempotencyKey: z.uuid() })
+        .strict()
+        .parse(await request.json());
+      return json(await createManualJournal(input, input.idempotencyKey), 201);
+    }
+    if (
+      segments[0] === "accounting" &&
+      segments[1] === "journals" &&
+      segments.length === 3
+    ) {
+      const id = uuid(segments[2]);
+      if (method === "GET") return json(await journalDetail(id));
+      if (method === "POST") {
+        const input = manualJournalInput
+          .extend({ version: z.number().int().positive() })
+          .strict()
+          .parse(await request.json());
+        return json(await updateManualJournal(id, input, input.version));
+      }
+      if (method === "DELETE") {
+        const input = z
+          .object({ version: z.number().int().positive() })
+          .strict()
+          .parse(await request.json());
+        return json(await deleteManualJournal(id, input.version));
+      }
+    }
+    if (route === "accounting/general-ledger" && method === "GET")
+      return json(
+        await generalLedger(uuid(params.get("account") || ""), {
+          from: params.has("from")
+            ? dateInput.parse(params.get("from"))
+            : undefined,
+          to: params.has("to") ? dateInput.parse(params.get("to")) : undefined,
+          page: z.coerce
+            .number()
+            .int()
+            .min(1)
+            .parse(params.get("page") || 1),
+        }),
+      );
+    if (route === "accounting/statements" && method === "GET")
+      return json(
+        await financialStatements(
+          currencyInput.parse(params.get("currency") || "EUR"),
+          dateInput.parse(params.get("from")),
+          dateInput.parse(params.get("to")),
+        ),
+      );
     if (route === "accounting/trial-balance" && method === "GET")
       return json(
         await trialBalance(

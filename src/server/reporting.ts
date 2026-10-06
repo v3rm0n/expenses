@@ -364,7 +364,7 @@ export async function applicationState() {
     "SELECT a.*,b.bank_name,b.country FROM accounts a LEFT JOIN bank_connections b ON b.id=a.connection_id ORDER BY a.source,a.name,a.currency",
   );
   const currencies = await query(
-    "SELECT DISTINCT currency FROM (SELECT currency FROM transactions UNION SELECT currency FROM accounts UNION SELECT currency FROM receipts UNION SELECT 'EUR') x WHERE currency IS NOT NULL ORDER BY currency",
+    "SELECT DISTINCT currency FROM (SELECT currency FROM transactions UNION SELECT currency FROM accounts UNION SELECT currency FROM ledger_accounts UNION SELECT currency FROM receipts UNION SELECT 'EUR') x WHERE currency IS NOT NULL ORDER BY currency",
   );
   const [review] = await query(`SELECT
     (SELECT count(*)::int FROM transactions t WHERE ${transactionNeedsReview}) AS transactions,

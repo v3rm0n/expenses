@@ -36,7 +36,6 @@ import { formatMoney, parseMoney } from "../lib/money";
 import type { EmailMessage } from "../lib/email-message";
 import { MerchantGroups } from "./merchants";
 import { AmazonImport } from "./amazon-import";
-import { AccountingPanel } from "./accounting";
 
 type Bank = { name: string; country: string; maximum_consent_validity: number };
 type Connection = {
@@ -703,7 +702,6 @@ export function SettingsView({ context: ctx }: { context: AppContext }) {
     <div className="view-stack">
       <ErrorMessage message={error || settings.error} />
       <MerchantGroups context={ctx} />
-      <AccountingPanel context={ctx} />
       <section className="panel">
         <SectionTitle
           title="Import period"

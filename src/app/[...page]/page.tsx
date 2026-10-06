@@ -25,10 +25,20 @@ export default async function Page({
       "connections",
       "rules",
       "settings",
+      "advanced",
       "login",
       "setup",
     ].includes(page[0]) ||
     (page[0] === "six-month" && page.length !== 1) ||
+    (page[0] === "advanced" &&
+      page[1] &&
+      ![
+        "journal",
+        "ledger",
+        "trial-balance",
+        "accounts",
+        "statements",
+      ].includes(page[1])) ||
     page.length > 2
   )
     notFound();

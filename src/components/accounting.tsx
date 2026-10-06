@@ -10,23 +10,10 @@ import {
   type AppContext,
 } from "./ui";
 import { decimalMoney, formatMoney } from "../lib/money";
-
-type LedgerAccount = {
-  id: string;
-  code: string;
-  name: string;
-  type: string;
-  balance: number;
-  opening_balance: number;
-  opening_date: string | null;
-  first_date: string | null;
-};
-type TrialBalance = {
-  currency: string;
-  debit: number;
-  credit: number;
-  accounts: LedgerAccount[];
-};
+import type {
+  AccountingAccount as LedgerAccount,
+  TrialBalance,
+} from "../lib/accounting";
 
 export function TransactionJournal({
   id,
@@ -187,6 +174,7 @@ export function AccountingPanel({ context: ctx }: { context: AppContext }) {
               <thead>
                 <tr>
                   <th>Account</th>
+                  <th>Code</th>
                   <th>Type</th>
                   <th>Balance</th>
                   <th>Opening balance</th>
@@ -195,7 +183,19 @@ export function AccountingPanel({ context: ctx }: { context: AppContext }) {
               <tbody>
                 {report.data.accounts.map((item) => (
                   <tr key={item.id}>
-                    <td>{item.name}</td>
+                    <td>
+                      <button
+                        className="text-link"
+                        onClick={() =>
+                          ctx.navigate(
+                            `/advanced/ledger?account=${item.id}&history=true&currency=${ctx.currency}`,
+                          )
+                        }
+                      >
+                        {item.name}
+                      </button>
+                    </td>
+                    <td>{item.display_code || "—"}</td>
                     <td>{item.type}</td>
                     <td>
                       {fmt(Math.abs(item.balance))}{" "}

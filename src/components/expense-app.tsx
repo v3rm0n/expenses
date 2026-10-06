@@ -21,6 +21,7 @@ import {
   Upload,
   CheckCheck,
   CircleHelp,
+  BookOpen,
 } from "lucide-react";
 import {
   api,
@@ -47,6 +48,7 @@ import {
 import { PeriodOverview } from "./overview";
 import { ReviewView } from "./review";
 import { ConnectionsView, RulesView, SettingsView } from "./settings";
+import { AdvancedView } from "./bookkeeping";
 
 const currentMonth = () =>
   new Intl.DateTimeFormat("sv-SE", {
@@ -62,6 +64,7 @@ const navigation = [
   { path: "/connections", label: "Connections", icon: Landmark },
   { path: "/rules", label: "Rules", icon: SlidersHorizontal },
   { path: "/settings", label: "Settings", icon: Settings2 },
+  { path: "/advanced", label: "Advanced", icon: BookOpen },
 ];
 export default function ExpenseApp() {
   const router = useRouter(),
@@ -203,7 +206,15 @@ export default function ExpenseApp() {
   }
   function selectCurrency(value: string) {
     setCurrency(value);
-    updateQuery({ currency: value }, true);
+    updateQuery(
+      {
+        currency: value,
+        ...(pathname.startsWith("/advanced/ledger") && value !== currency
+          ? { account: "" }
+          : {}),
+      },
+      true,
+    );
   }
   const context: AppContext = {
     state: state.data,
@@ -259,7 +270,7 @@ export default function ExpenseApp() {
           {navigation.map((item) => (
             <button
               key={item.path}
-              className={`nav-item ${(item.path === "/" ? active === "overview" : pathname.startsWith(item.path)) ? "active" : ""} ${item.path === "/connections" ? "nav-separated" : ""}`}
+              className={`nav-item ${(item.path === "/" ? active === "overview" : pathname.startsWith(item.path)) ? "active" : ""} ${["/connections", "/advanced"].includes(item.path) ? "nav-separated" : ""}`}
               aria-current={
                 (
                   item.path === "/"
@@ -314,15 +325,17 @@ export default function ExpenseApp() {
                 <Menu size={21} />
               </button>
               <h1>
-                {path.length > 1
-                  ? active === "receipts"
-                    ? "Receipt details"
-                    : "Transaction details"
-                  : title}
+                {active === "advanced"
+                  ? "Advanced bookkeeping"
+                  : path.length > 1
+                    ? active === "receipts"
+                      ? "Receipt details"
+                      : "Transaction details"
+                    : title}
               </h1>
             </div>
-            {path.length <= 1 &&
-              ["overview", "transactions"].includes(active) && (
+            {(path.length <= 1 || active === "advanced") &&
+              ["overview", "transactions", "advanced"].includes(active) && (
                 <div className="page-controls">
                   {active === "overview" && (
                     <select
@@ -362,32 +375,33 @@ export default function ExpenseApp() {
                       ),
                     )}
                   </select>
-                  {search.get("history") !== "true" && (
-                    <div className="month-picker">
-                      <button
-                        aria-label="Previous month"
-                        onClick={() => shiftMonth(-1)}
-                      >
-                        <ChevronLeft size={16} />
-                      </button>
-                      <ISODateInput
-                        precision="month"
-                        aria-label={
-                          active === "overview" ? "Period ending" : "Month"
-                        }
-                        value={month}
-                        onChange={(e) =>
-                          e.target.value && selectMonth(e.target.value)
-                        }
-                      />
-                      <button
-                        aria-label="Next month"
-                        onClick={() => shiftMonth(1)}
-                      >
-                        <ChevronRight size={16} />
-                      </button>
-                    </div>
-                  )}
+                  {active !== "advanced" &&
+                    search.get("history") !== "true" && (
+                      <div className="month-picker">
+                        <button
+                          aria-label="Previous month"
+                          onClick={() => shiftMonth(-1)}
+                        >
+                          <ChevronLeft size={16} />
+                        </button>
+                        <ISODateInput
+                          precision="month"
+                          aria-label={
+                            active === "overview" ? "Period ending" : "Month"
+                          }
+                          value={month}
+                          onChange={(e) =>
+                            e.target.value && selectMonth(e.target.value)
+                          }
+                        />
+                        <button
+                          aria-label="Next month"
+                          onClick={() => shiftMonth(1)}
+                        >
+                          <ChevronRight size={16} />
+                        </button>
+                      </div>
+                    )}
                 </div>
               )}
           </div>
@@ -422,6 +436,13 @@ export default function ExpenseApp() {
           {active === "connections" && <ConnectionsView context={context} />}
           {active === "rules" && <RulesView context={context} />}
           {active === "settings" && <SettingsView context={context} />}
+          {active === "advanced" && (
+            <AdvancedView
+              key={`${currency}-${path[1] || "journal"}`}
+              context={context}
+              view={path[1] || "journal"}
+            />
+          )}
         </main>
       </div>
       <nav
