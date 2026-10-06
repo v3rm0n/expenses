@@ -98,6 +98,11 @@ import {
   productCategory,
 } from "../lib/classification";
 import type { Allocation, Retailer, Rule } from "../lib/types";
+import {
+  financialOverview,
+  loadSpendingPlan,
+  saveSpendingPlan,
+} from "./spending-plan";
 
 const identifier = z.string().regex(/^[\w-]{1,100}$/);
 const uuid = (value: string) => z.uuid().parse(value);
@@ -221,6 +226,37 @@ export async function handleApi(
     }
     if (route === "state" && method === "GET")
       return json(await applicationState());
+    if (
+      ["financial-overview", "spending-plan"].includes(route) &&
+      method === "GET"
+    ) {
+      const month =
+        params.get("month") ||
+        new Intl.DateTimeFormat("sv-SE", {
+          timeZone: "Europe/Tallinn",
+          year: "numeric",
+          month: "2-digit",
+        }).format(new Date());
+      const currency = currencyInput.parse(params.get("currency") || "EUR");
+      return json(
+        await (route === "financial-overview"
+          ? financialOverview(month, currency)
+          : loadSpendingPlan(month, currency)),
+      );
+    }
+    if (route === "spending-plan" && method === "POST") {
+      const input = z
+        .object({
+          month: z.string(),
+          currency: currencyInput,
+          plan: z.unknown(),
+        })
+        .strict()
+        .parse(await request.json());
+      return json(
+        await saveSpendingPlan(input.month, input.currency, input.plan),
+      );
+    }
     if (route === "accounting/accounts" && method === "POST") {
       const input = z
         .object({

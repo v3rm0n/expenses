@@ -9,7 +9,8 @@ A private, single-owner web app for tracking bank transactions and itemized rece
 - Transaction search, cash entries, classification rules, and product categories.
 - Double-entry journals, account balances, and editable opening balances, with database-enforced balancing.
 - Advanced bookkeeping with manual split journals, a general ledger, trial balance, chart of accounts, income statement, and balance sheet.
-- Spending, income, cash flow, and investment and pension reporting, with each currency tracked separately.
+- Monthly spending plans, remaining allowances, spending forecasts, bill checklists, and investment/pension goals, with each currency tracked separately.
+- Detailed spending, income, cash flow, merchant, and contribution history analysis.
 - CSV exports and encrypted backups of the database and original documents.
 
 ## Running locally

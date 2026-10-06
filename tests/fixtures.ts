@@ -232,3 +232,21 @@ Boonusmakse 0,47 EUR
 PartnerÄpp makse 9,36 EUR
 KOKKU 9,83 EUR
 Selver AS`;
+
+export const selverLegacyPdfText = selverPdfText
+  .replace("Tšeki nr PDF-1001", "Tšeki number: PDF-1001")
+  .replace("Kuupäev 28.09.2026", "Ostu kuupäev: 28.09.2026")
+  .replace(
+    "Toode Kogus Ühiku hind Kokku",
+    "Toote nimi Tootekood Hind Kogus Summa",
+  )
+  .replace(
+    /^(.*?) ([\d,]+) ([\d,]+) ([\d,]+) EUR$/gm,
+    "$1 4740000000001 $3 $2 $4",
+  )
+  .replace("Boonusmakse", "BOONUSRAHA")
+  .replace("PartnerÄpp makse", "PARTNERAPP")
+  .replace(
+    "Selver AS",
+    "KM% Käibemaks Neto Bruto\n24% 1,86 7,77 9,63\n0% 0,00 0,20 0,20\nSelver AS",
+  );

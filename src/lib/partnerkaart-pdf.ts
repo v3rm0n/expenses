@@ -7,7 +7,11 @@ export function parsePartnerkaartPdf(
   text: string,
   hint?: Retailer,
 ): ParsedReceipt | null {
-  const header = /^Toode\s+Kogus\s+[ÜU]hiku hind\s+Kokku$/i;
+  const header =
+    /^(?:Toode\s+Kogus\s+[ÜU]hiku hind\s+Kokku|Toote nimi\s+Tootekood\s+Hind\s+Kogus\s+Summa)$/i;
+  const legacy = /^Toote nimi\s+Tootekood\s+Hind\s+Kogus\s+Summa\s*$/im.test(
+    text,
+  );
   const lines = text
     .split("\n")
     .map((line) => line.trim().replace(/\s+/g, " "));
@@ -28,7 +32,9 @@ export function parsePartnerkaartPdf(
         : /kaubamaja/i.test(text)
           ? "Kaubamaja"
           : "Selver / Partnerkaart",
-    number: text.match(/T[šs]eki?\s+nr\.?\s*[:.]?\s*([\w/-]+)/i)?.[1] || null,
+    number:
+      text.match(/T[šs]eki?\s+(?:number|nr\.?)\s*[:.]?\s*([\w/-]+)/i)?.[1] ||
+      null,
     purchasedAt: null,
     currency: "EUR",
     total: null,
@@ -39,7 +45,7 @@ export function parsePartnerkaartPdf(
     issues: [],
     text,
   };
-  const date = text.match(/Kuup[äa]ev\s+(\d{2})[./](\d{2})[./](20\d{2})/i);
+  const date = text.match(/Kuup[äa]ev\s*:?\s+(\d{2})[./](\d{2})[./](20\d{2})/i);
   try {
     result.purchasedAt = validDate(
       date ? `${date[3]}-${date[2]}-${date[1]}` : "",
@@ -56,8 +62,11 @@ export function parsePartnerkaartPdf(
   };
   const amount = "([−-]?\\d+[.,]\\d{2})\\s*(?:€|EUR)?";
   const totalPattern = new RegExp(`^Kokku\\s+${amount}$`, "i");
+  const quantityPattern = "([−-]?\\d+(?:[.,]\\d+)?)";
   const rowPattern = new RegExp(
-    `^(.+?)\\s+([−-]?\\d+(?:[.,]\\d+)?)\\s+${amount}\\s+${amount}$`,
+    legacy
+      ? `^(.+?)\\s+\\d{8,14}\\s+${amount}\\s+${quantityPattern}\\s+${amount}$`
+      : `^(.+?)\\s+${quantityPattern}\\s+${amount}\\s+${amount}$`,
     "i",
   );
   let basket = false,
@@ -68,6 +77,7 @@ export function parsePartnerkaartPdf(
   const totals: number[] = [];
   for (const line of lines) {
     if (!line) continue;
+    if (/^KM%(?:\s|$)/i.test(line)) break;
     if (header.test(line)) {
       basket = true;
       foundBasket = true;
@@ -100,7 +110,7 @@ export function parsePartnerkaartPdf(
       const description = [...pending, row[1]].join(" ");
       pending = [];
       const value = money(row[4]);
-      const quantity = row[2].replace(",", ".");
+      const quantity = row[legacy ? 3 : 2].replace(",", ".").replace(/−/g, "-");
       if (
         !/[\p{L}]/u.test(description) ||
         value === null ||
@@ -125,13 +135,13 @@ export function parsePartnerkaartPdf(
       continue;
     }
     const payment = line.match(
-      /^(Boonusmakse|Partner[ÄA]pp makse|Pangakaart|Kaardimakse|Sularaha)(?:\s+(.*))?$/i,
+      /^(Boonusmakse|Boonusraha|Partner[ÄA]pp makse|Partnerapp|Pangakaart|Kaardimakse|Sularaha)(?:\s+(.*))?$/i,
     );
     if (payment) {
       const value = money((payment[2] || "").replace(/\s*(?:€|EUR)\s*$/i, ""));
       if (value === null || value < 0)
         result.issues.push("A receipt payment amount could not be read.");
-      else if (/^Boonusmakse$/i.test(payment[1])) bonus += value;
+      else if (/^(?:Boonusmakse|Boonusraha)$/i.test(payment[1])) bonus += value;
       else if (/^Sularaha$/i.test(payment[1]))
         result.cashAmount = (result.cashAmount || 0) + value;
       else result.cardAmount = (result.cardAmount || 0) + value;

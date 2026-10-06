@@ -1,0 +1,436 @@
+.overview-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.allowance-panel {
+  display: flex;
+  justify-content: space-between;
+  gap: 28px;
+  align-items: center;
+  padding: 30px;
+  border: 1px solid #d4e2c9;
+  border-radius: 12px;
+  background: #e8efdf;
+  color: #385238;
+}
+.allowance-panel .eyebrow {
+  font-size: 11px;
+  letter-spacing: 1.3px;
+  font-weight: 600;
+}
+.allowance-panel h2 {
+  font-size: clamp(25px, 3vw, 38px);
+  font-weight: 500;
+  letter-spacing: -1px;
+  margin: 12px 0;
+}
+.allowance-panel p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  max-width: 620px;
+}
+.allowance-panel.is-negative {
+  background: #fbefeb;
+  border-color: #edcfc6;
+  color: #9d453e;
+}
+.allowance-pace {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: right;
+  border-left: 1px solid #bacdac;
+  padding-left: 28px;
+}
+.allowance-pace strong {
+  font-size: 28px;
+  font-weight: 500;
+}
+.allowance-pace span,
+.allowance-pace small {
+  font-size: 12px;
+}
+.financial-metrics .metric {
+  padding: 18px;
+}
+.financial-metrics .metric-label {
+  min-height: 32px;
+  letter-spacing: 0.6px;
+  gap: 6px;
+  line-height: 1.5;
+}
+.financial-metrics .metric-label > span {
+  flex-shrink: 0;
+}
+.financial-metrics .metric-value {
+  font-size: clamp(21px, 2.4vw, 30px);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.planning-warning {
+  background: #fbefeb;
+  color: #9d453e;
+  border-color: #edcfc6;
+}
+.financial-overview .notice > p {
+  margin: 0;
+}
+.goal-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding: 0 24px 24px;
+}
+.goal-card {
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  min-width: 0;
+}
+.goal-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.goal-heading h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+.goal-heading > span {
+  margin-left: auto;
+}
+.goal-amount {
+  margin: 20px 0 8px;
+  line-height: 1.6;
+}
+.goal-amount strong {
+  font-size: 25px;
+  font-weight: 500;
+}
+.goal-amount > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.goal-annual {
+  margin: 20px 0 0;
+  font-size: 12px;
+}
+.goal-card .form-help {
+  line-height: 1.6;
+}
+.planning-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.planning-category-list {
+  padding: 0 24px;
+}
+.planning-category-list > button {
+  display: block;
+  width: 100%;
+  padding: 15px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  text-align: left;
+  color: inherit;
+}
+.planning-category-list > button:hover {
+  background: #f7f9f4;
+}
+.planning-category-list > button:last-child {
+  border-bottom: 0;
+}
+.planning-category-heading,
+.planning-category-caption {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+.planning-category-heading > span {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.planning-category-heading i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.planning-category-caption {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 9px;
+  line-height: 1.6;
+}
+.planning-footer {
+  padding: 16px 24px;
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 0;
+}
+.planning-empty {
+  padding: 0 24px 24px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.commitment-list {
+  padding: 0 24px;
+}
+.commitment-list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.commitment-list > div > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.commitment-list small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.commitment-list .planning-empty {
+  padding: 0 0 16px;
+}
+.cash-check {
+  margin: 18px 24px 24px;
+  padding: 16px;
+  background: #f5f7f1;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.cash-check p {
+  margin: 6px 0;
+}
+.cash-check small {
+  color: var(--muted);
+}
+.surplus-trend {
+  padding: 0 24px 20px;
+}
+.surplus-trend > button {
+  display: grid;
+  grid-template-columns: 120px minmax(40px, 1fr) 110px;
+  align-items: center;
+  gap: 18px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  padding: 9px 0;
+  width: 100%;
+  text-align: left;
+}
+.surplus-trend > button:hover {
+  background: #f7f9f4;
+}
+.surplus-trend strong {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.surplus-track {
+  height: 18px;
+  position: relative;
+  background: #f5f7f1;
+  border-radius: 3px;
+}
+.surplus-track::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #c0c8ba;
+}
+.surplus-track i {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  background: #8fab76;
+  border-radius: 2px;
+}
+.surplus-track i.deficit {
+  background: #bf514b;
+}
+.planning-data-note {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  line-height: 1.6;
+}
+.planning-data-note > span {
+  flex: 1;
+  min-width: 200px;
+}
+.planning-footnote {
+  font-size: 11px;
+  line-height: 1.8;
+  color: var(--muted);
+  margin: 0;
+}
+.spending-plan-form {
+  padding: 0 24px 24px;
+}
+.spending-plan-form fieldset {
+  border: 0;
+  padding: 0;
+  margin: 24px 0 30px;
+  min-width: 0;
+}
+.spending-plan-form legend {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 15px;
+  padding: 0;
+}
+.spending-plan-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+.spending-plan-form input,
+.spending-plan-form select {
+  width: 100%;
+  min-width: 0;
+}
+.spending-plan-form .form-help {
+  line-height: 1.7;
+  margin-top: 0;
+}
+.spending-plan-form .form-grid {
+  gap: 18px;
+}
+.plan-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 18px 0;
+}
+.budget-edit-row {
+  display: grid;
+  grid-template-columns:
+    minmax(150px, 1.2fr) minmax(100px, 1fr) minmax(140px, 1fr)
+    30px;
+  align-items: end;
+  gap: 12px;
+}
+.bill-edit-row {
+  display: grid;
+  grid-template-columns:
+    minmax(140px, 1.3fr) minmax(80px, 0.8fr) 65px minmax(130px, 1fr)
+    minmax(120px, 1fr) 30px;
+  align-items: end;
+  gap: 12px;
+}
+.budget-edit-row .plan-checkbox {
+  flex-direction: row;
+  align-items: center;
+  align-self: center;
+}
+.plan-checkbox input {
+  width: auto;
+}
+.plan-save {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-top: 1px solid var(--line);
+  padding-top: 22px;
+}
+.plan-save .button {
+  flex-shrink: 0;
+}
+@media (max-width: 1200px) {
+  .bill-edit-row {
+    grid-template-columns: minmax(120px, 1fr) minmax(90px, 1fr) 70px;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+}
+@media (max-width: 780px) {
+  .allowance-panel {
+    padding: 22px;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+  .allowance-pace {
+    text-align: left;
+    border-left: 0;
+    padding-left: 0;
+    border-top: 1px solid #bacdac;
+    padding-top: 16px;
+    width: 100%;
+  }
+  .goal-cards,
+  .planning-columns {
+    grid-template-columns: 1fr;
+  }
+  .goal-cards {
+    padding: 0 18px 18px;
+  }
+  .goal-heading > span {
+    margin-left: 0;
+  }
+  .overview-context {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .spending-plan-form {
+    padding: 0 18px 18px;
+  }
+  .budget-edit-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+  .budget-edit-row > button {
+    justify-self: end;
+  }
+  .bill-edit-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .bill-edit-row > button {
+    justify-self: end;
+  }
+  .surplus-trend > button {
+    grid-template-columns: 90px minmax(30px, 1fr) 88px;
+    gap: 8px;
+    font-size: 11px;
+  }
+  .surplus-trend {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+  .plan-save {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .receipt-coverage-summary .section-heading {
+    flex-wrap: wrap;
+  }
+}

@@ -1,8 +1,41 @@
 import { describe, expect, it } from "vitest";
 import { parseReceipt } from "../../src/lib/receipt-parser";
-import { selverPdfText } from "../fixtures";
+import { selverPdfText, selverLegacyPdfText } from "../fixtures";
 
 describe("Selver / Partnerkaart PDF", () => {
+  it("reads legacy e-receipts and deducts bonus points from products, excluding deposits", () => {
+    const receipt = parseReceipt(selverLegacyPdfText);
+    expect(receipt).toEqual({
+      ...parseReceipt(selverPdfText),
+      text: selverLegacyPdfText,
+    });
+    expect(parseReceipt(selverLegacyPdfText)).toEqual(receipt);
+  });
+  it("reads legacy receipts without bonus points and with split tender", () => {
+    const receipt = parseReceipt(
+      selverLegacyPdfText.replace(
+        "BOONUSRAHA 0,47 EUR\nPARTNERAPP 9,36 EUR",
+        "PANGAKAART 5,00\nSULARAHA 4,83",
+      ),
+    );
+    expect(receipt).toMatchObject({
+      valid: true,
+      total: 983,
+      cardAmount: 500,
+      cashAmount: 483,
+    });
+  });
+  it.each([
+    ["BOONUSRAHA 0,47 EUR", "BOONUSRAHA unknown"],
+    ["BOONUSRAHA 0,47 EUR", "BOONUSRAHA -0,47"],
+    ["PARTNERAPP 9,36 EUR", "PARTNERAPP 9,35"],
+    ["PARTNERAPP 9,36 EUR", ""],
+    ["4740000000001 6,97 0,228 1,59", "4740000000001 6,97 unknown 1,59"],
+  ])("keeps damaged legacy receipts in review: %s", (before, after) => {
+    const receipt = parseReceipt(selverLegacyPdfText.replace(before, after));
+    expect(receipt.valid).toBe(false);
+    expect(receipt.total).not.toBe(936);
+  });
   it("reconciles discounted rows and bonus money while keeping deposits and repeated products", () => {
     const receipt = parseReceipt(selverPdfText);
     expect(receipt).toMatchObject({

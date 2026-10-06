@@ -11,6 +11,7 @@ import {
   scannedPdf,
   selverCsv,
   selverPdfText,
+  selverLegacyPdfText,
   woltReceiptText,
   woltOrderId,
   lidlReceiptText,
@@ -64,6 +65,114 @@ const check = (message: string, fn: () => Promise<void>) =>
   });
 try {
   await migrate();
+  await check(
+    "spending plans persist per currency and month and reserve external pending payments once",
+    async () => {
+      const { saveSpendingPlan, loadSpendingPlan, financialOverview } =
+        await import("../src/server/spending-plan");
+      const { emptyPlan } = await import("../src/lib/spending-plan");
+      const today = new Intl.DateTimeFormat("sv-SE", {
+        timeZone: "Europe/Tallinn",
+      }).format(new Date());
+      const month = today.slice(0, 7);
+      const [account] = await query(
+        "INSERT INTO accounts(identification_hash,name,currency) VALUES('planning-test','Planning test','BRL') RETURNING id",
+      );
+      const add = async (
+        key: string,
+        amount: number,
+        kind: string,
+        status = "PDNG",
+        date: string | null = null,
+        currency = "BRL",
+      ) => {
+        const [entry] = await query(
+          "INSERT INTO transactions(account_id,source_key,amount,kind,status,booked_at,merchant,currency) VALUES($1,$2,$3,$4,$5,$6,'Planning test',$7) RETURNING id",
+          [account.id, key, amount, kind, status, date, currency],
+        );
+        if (status === "BOOK" && kind === "expense")
+          await query(
+            "INSERT INTO allocations VALUES($1,'groceries',$2,'manual')",
+            [entry.id, -amount],
+          );
+      };
+      try {
+        await add("income", 100000, "income", "BOOK", today);
+        await add("expense", -10000, "expense", "BOOK", today);
+        await add("investment", -1000, "investment", "BOOK", today);
+        await add("pending-expense", -2000, "expense");
+        await add("pending-investment", -1000, "investment");
+        await add("pending-internal", -50000, "transfer");
+        await add("pending-cash", -50000, "cash_movement");
+        await add(
+          "pending-other-currency",
+          -50000,
+          "expense",
+          "PDNG",
+          null,
+          "AUD",
+        );
+        const plan = {
+          ...emptyPlan(),
+          income: 100000,
+          investmentMonthly: 5000,
+          buffer: 1000,
+          cashBalance: 10000,
+          investmentAnnual: 12000,
+          budgets: [{ categoryId: "groceries", amount: 20000, flexible: true }],
+        };
+        const saved = await saveSpendingPlan(month, "BRL", plan);
+        assert.ok(saved.cashUpdatedAt);
+        assert.deepEqual((await loadSpendingPlan(month, "BRL")).plan, plan);
+        const same = await saveSpendingPlan(month, "BRL", {
+          ...plan,
+          income: 110000,
+        });
+        assert.equal(same.cashUpdatedAt, saved.cashUpdatedAt);
+        const other = await loadSpendingPlan(
+          `${month.slice(0, 4)}-${month.endsWith("-01") ? "02" : "01"}`,
+          "BRL",
+        );
+        assert.equal(other.saved, false);
+        assert.equal(other.plan.income, null);
+        assert.equal(other.plan.investmentAnnual, 12000);
+        assert.equal(
+          (await loadSpendingPlan(month, "AUD")).plan.investmentAnnual,
+          0,
+        );
+        const report = await financialOverview(month, "BRL");
+        assert.equal(report.pending.spending, 2000);
+        assert.equal(report.pending.investment, 1000);
+        assert.equal(report.pending.outgoing, 3000);
+        assert.equal(report.outlook.cashBeforePayday, 6000);
+        assert.equal(
+          report.outlook.investment.remaining,
+          Math.max(5000, Math.ceil(12000 / (13 - Number(month.slice(5, 7))))) -
+            2000,
+        );
+        await assert.rejects(
+          saveSpendingPlan(month, "BRL", {
+            ...plan,
+            budgets: [
+              { categoryId: "nonexistent", amount: 10, flexible: true },
+            ],
+          }),
+          /existing spending categories/,
+        );
+      } finally {
+        await transaction(async (db) => {
+          await db.query("DELETE FROM transactions WHERE account_id=$1", [
+            account.id,
+          ]);
+          await db.query("DELETE FROM accounts WHERE id=$1", [account.id]);
+          await db.query("DELETE FROM settings WHERE key IN ($1,$2)", [
+            `spending-plan:BRL:${month}`,
+            `annual-goals:BRL:${month.slice(0, 4)}`,
+          ]);
+        });
+      }
+    },
+  );
   await check(
     "merchant aliases group history and future imports, preserve originals, and allow reversible edits",
     async () => {
@@ -1589,6 +1698,70 @@ KUUPÄEV: 02.10.2026`;
         );
       }
       assert.equal((await storeReceipt(csv, "same-bonus.csv")).id, uploaded.id);
+    },
+  );
+  await check(
+    "Legacy Partnerkaart PDF reparsing preserves category edits and matches net payments",
+    async () => {
+      const pdf = textPdf(
+        selverLegacyPdfText
+          .replace("PDF-1001", "LEGACY-1001")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, ""),
+      );
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [
+            {
+              ...bank("legacy-selver-pdf", "9.36", "Selver"),
+              booking_date: "2026-09-28",
+            },
+          ],
+          db,
+        ),
+      );
+      const uploaded = await storeReceipt(pdf, "legacy-selver.pdf");
+      // Simulate the generic parser's stored product name and a user's category edit.
+      await query(
+        "INSERT INTO receipt_items(receipt_id,position,description,amount,category_id,manual) VALUES($1,0,$2,375,'health',true)",
+        [uploaded.id, "Hambavahepuhasti 4740000000001 4,45 1"],
+      );
+      await processReceipt(uploaded.id);
+      const [receipt] = await query(
+        "SELECT total,card_amount,status FROM receipts WHERE id=$1",
+        [uploaded.id],
+      );
+      assert.deepEqual(receipt, {
+        total: 936,
+        card_amount: 936,
+        status: "matched",
+      });
+      const [item] = await query(
+        "SELECT amount,category_id,manual FROM receipt_items WHERE receipt_id=$1 AND description='Hambavahepuhasti'",
+        [uploaded.id],
+      );
+      assert.deepEqual(item, {
+        amount: 357,
+        category_id: "health",
+        manual: true,
+      });
+      await processReceipt(uploaded.id);
+      assert.equal(
+        (
+          await query("SELECT total FROM receipts WHERE id=$1", [uploaded.id])
+        )[0].total,
+        936,
+      );
+      assert.equal(
+        (
+          await query(
+            "SELECT amount FROM receipt_payments WHERE receipt_id=$1",
+            [uploaded.id],
+          )
+        )[0].amount,
+        936,
+      );
     },
   );
   await check(

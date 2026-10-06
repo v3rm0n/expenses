@@ -141,9 +141,13 @@ test("owner setup, cash ledger, receipt corrections and mobile overview", async 
   await expect(page.getByText("Pesuvahend", { exact: true })).toBeVisible({
     timeout: 30000,
   });
-  await page.getByRole("button", { name: "Edit receipt" }).click();
+  await page.locator("h1").click();
+  await page.keyboard.press("e");
+  await expect(
+    page.getByRole("button", { name: "Cancel editing" }),
+  ).toBeVisible();
   await page.getByLabel("Product category 2").selectOption("health");
-  await page.getByRole("button", { name: "Save and validate" }).click();
+  await page.keyboard.press("Control+Enter");
   await expect(
     page.getByRole("button", { name: "Edit receipt" }),
   ).toBeVisible();
@@ -201,9 +205,7 @@ test("owner setup, cash ledger, receipt corrections and mobile overview", async 
     page.getByRole("heading", { name: "Create a rule" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Overview", exact: true }).click();
-  await page
-    .getByLabel("Period ending", { exact: true })
-    .fill(today.slice(0, 7));
+  await page.getByLabel("Month", { exact: true }).fill(today.slice(0, 7));
   await mkdir(".data/screenshots", { recursive: true });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.screenshot({
@@ -318,7 +320,7 @@ test("authentication, CSRF, email bearer token and idempotent cash imports", asy
   ).toBe(409);
 });
 
-test("overview combines investment and pension analysis and fits a phone", async ({
+test("goals preserve contribution history and fit a phone", async ({
   page,
 }) => {
   const headers = { Origin: "http://127.0.0.1:4318" };
@@ -367,12 +369,11 @@ test("overview combines investment and pension analysis and fits a phone", async
   expect(summary.investment.contributed).toBe(10000);
   expect(summary.pension.contributed).toBe(5000);
   expect(summary.net_cash_flow).toBe(-15000);
-  await page.goto("/");
+  await page.goto("/goals");
   await page.getByLabel("Currency", { exact: true }).selectOption("GBP");
-  await page.getByLabel("Period length").selectOption("6");
   const section = page.locator(".contributions-panel");
   await expect(
-    section.getByRole("heading", { name: "Investments and pensions" }),
+    section.getByRole("heading", { name: "Contribution history" }),
   ).toBeVisible();
   await expect(section.locator(".metric-value").nth(0)).toHaveText("£100.00");
   await expect(section.locator(".metric-value").nth(1)).toHaveText("£50.00");
@@ -502,7 +503,7 @@ test("filters survive detail navigation, CSV matches results, and mobile amounts
   await expect(monthCalendar).toHaveAttribute("type", "month");
   await monthCalendar.fill("2026-08");
   await page.reload();
-  await expect(page.getByLabel("Period ending", { exact: true })).toHaveValue(
+  await expect(page.getByLabel("Month", { exact: true })).toHaveValue(
     "2026-08",
   );
   await page.getByRole("button", { name: "Open navigation" }).click();
@@ -848,10 +849,15 @@ test("guided period review saves, skips, imports receipts and resumes the curren
   await expect(
     page.getByRole("heading", { name: `Review first ${prefix}`, exact: true }),
   ).toBeVisible();
+  await page.locator("h1").click();
+  await page.keyboard.press("c");
+  await expect(page.getByLabel("Category 1", { exact: true })).toBeFocused();
+  await page.getByLabel("Personal note").fill("Receipt note");
+  await page.keyboard.press("n");
+  await expect(page).toHaveURL(new RegExp(first));
+  await expect(page.getByLabel("Personal note")).toHaveValue("Receipt noten");
   await page.getByLabel("Category amount 1", { exact: true }).fill("2.99");
-  await page
-    .getByRole("button", { name: "Save and next", exact: true })
-    .click();
+  await page.keyboard.press("Control+Enter");
   await expect(
     page
       .getByRole("alert")
@@ -862,25 +868,23 @@ test("guided period review saves, skips, imports receipts and resumes the curren
   await page
     .getByLabel("Category 1", { exact: true })
     .selectOption("subscriptions");
-  await page.getByLabel("Receipt not required", { exact: true }).check();
+  await page.locator("h1").click();
+  await page.keyboard.press("r");
   await expect(page.getByRole("status")).toHaveText(
     "Payment excluded from receipt coverage.",
   );
   await expect(page.getByLabel("Category 1", { exact: true })).toHaveValue(
     "subscriptions",
   );
-  await page
-    .getByRole("button", { name: "Save and next", exact: true })
-    .click();
+  await page.keyboard.press("Control+Enter");
   await expect(
     page.getByRole("heading", {
       name: `Rimi review second ${prefix}`,
       exact: true,
     }),
   ).toBeVisible();
-  await page
-    .getByRole("button", { name: "Import receipt", exact: true })
-    .click();
+  await page.locator("h1").click();
+  await page.keyboard.press("u");
   await expect(
     page.getByRole("button", { name: "Back to review", exact: true }),
   ).toBeVisible();
@@ -924,7 +928,8 @@ test("guided period review saves, skips, imports receipts and resumes the curren
       () => document.documentElement.scrollWidth <= window.innerWidth,
     ),
   ).toBe(true);
-  await page.getByRole("button", { name: "Skip for now", exact: true }).click();
+  await page.locator("h1").click();
+  await page.keyboard.press("n");
   await expect(
     page.getByRole("heading", { name: "Review pass complete", exact: true }),
   ).toBeVisible();
@@ -1368,7 +1373,7 @@ test("account nicknames persist and appear in filters, lists and transaction det
   ).toBe(account.name);
 });
 
-test("overview supports one to twelve months, cumulative net cash flow and signed refunds", async ({
+test("spending analysis supports one to twelve months, cumulative net cash flow and signed refunds", async ({
   page,
 }) => {
   const password = "only-for-isolated-test-db";
@@ -1528,14 +1533,12 @@ test("overview supports one to twelve months, cumulative net cash flow and signe
       .locator("nav")
       .getByRole("button", { name: "6 month view", exact: true }),
   ).toHaveCount(0);
-  await expect(page.getByLabel("Period length")).toHaveValue("1");
-  await expect(page.locator(".contributions-panel tbody tr")).toHaveCount(1);
-  await page.getByLabel("Period length").selectOption("6");
-  await expect(page).toHaveURL(/months=6/);
+  await expect(page.getByLabel("Period length")).toHaveCount(0);
   await expect(
-    page.getByRole("heading", { name: "Spending and income" }),
+    page.getByRole("heading", { name: "Goal progress" }),
   ).toBeVisible();
-  await expect(page.getByLabel("Period ending", { exact: true })).toHaveValue(
+  await page.goto("/goals?month=2034-06&currency=JPY");
+  await expect(page.getByLabel("Month", { exact: true })).toHaveValue(
     "2034-06",
   );
   const contributions = page.locator(".contributions-panel");
@@ -1640,7 +1643,9 @@ test("overview supports one to twelve months, cumulative net cash flow and signe
     "Analysis cafe",
   );
   await page.getByLabel("Period length").selectOption("12");
-  await expect(page.locator(".contributions-panel tbody tr")).toHaveCount(12);
+  await expect(page.locator(".analysis-period")).toContainText(
+    "12 calendar months",
+  );
   await expect(page.getByLabel("Period length")).toHaveValue("12");
   expect(
     await page.evaluate(
@@ -1677,7 +1682,9 @@ test("overview supports one to twelve months, cumulative net cash flow and signe
       ).status(),
     ).toBe(400);
   await page.getByLabel("Period length").selectOption("1");
-  await expect(page.locator(".contributions-panel tbody tr")).toHaveCount(1);
+  await expect(page.locator(".analysis-period")).toContainText(
+    "One calendar month",
+  );
   await expect(page.getByLabel("Analysis category")).toHaveValue("");
   expect(errors).toEqual([]);
 });
@@ -2649,4 +2656,86 @@ test("advanced bookkeeping creates accounts, posts and edits split journals, and
     (await page.request.get(`/api/accounting/journals/${entryId}`)).status(),
   ).toBe(404);
   expect(errors).toEqual([]);
+});
+
+test("receipt review hotkeys preserve edits and advance to the next receipt", async ({
+  page,
+}) => {
+  await signInOwner(page);
+  const prefix = randomUUID().slice(0, 8);
+  await page.goto("/receipts");
+  await page.getByLabel("Receipt files").setInputFiles(
+    [1, 2].map((index) => ({
+      name: `hotkeys-${prefix}-${index}.txt`,
+      mimeType: "text/plain",
+      buffer: Buffer.from(
+        receiptText("Rimi", `HOTKEYS-${prefix}-${index}`, "02.03.2028"),
+      ),
+    })),
+  );
+  await page
+    .getByRole("button", { name: "Import receipts", exact: true })
+    .click();
+  for (const index of [1, 2]) {
+    await expect(
+      page
+        .getByRole("row")
+        .filter({ hasText: `hotkeys-${prefix}-${index}.txt` })
+        .getByText("Ready to link", { exact: true }),
+    ).toBeVisible({ timeout: 30000 });
+  }
+  const response = await (await page.request.get("/api/review")).json();
+  const receipts = response.receipts.filter((receipt: { filename: string }) =>
+    receipt.filename.startsWith(`hotkeys-${prefix}`),
+  );
+  expect(receipts).toHaveLength(2);
+  // Limit this review pass to the two test receipts while keeping real detail
+  // fetches and writes, independent of earlier workflows' pending receipts.
+  await page.route("**/api/review", (route) =>
+    route.fulfill({ json: { ...response, receipts } }),
+  );
+  await page.goto("/review?tab=imports");
+  await page
+    .getByRole("row")
+    .filter({ hasText: receipts[0].filename })
+    .getByRole("button")
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Next receipt", exact: true }),
+  ).toBeEnabled();
+  await page.locator("h1").click();
+  await page.keyboard.press("l");
+  await expect(page).toHaveURL(new RegExp(receipts[0].id));
+  await page.keyboard.press("e");
+  await expect(
+    page.getByRole("button", { name: "Next receipt", exact: true }),
+  ).toBeDisabled();
+  await page.getByLabel("Merchant", { exact: true }).fill("Edited merchant");
+  await page.keyboard.press("n");
+  await expect(page.getByLabel("Merchant", { exact: true })).toHaveValue(
+    "Edited merchantn",
+  );
+  await page.locator("h1").click();
+  await page.keyboard.press("n");
+  await expect(page).toHaveURL(new RegExp(receipts[0].id));
+  await page.keyboard.press("Meta+Enter");
+  await expect(
+    page.getByRole("button", { name: "Edit receipt", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("n");
+  await expect(page).toHaveURL(new RegExp(receipts[1].id));
+  await expect(
+    page.getByRole("button", { name: "Edit receipt", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("e");
+  await expect(page.getByLabel("Merchant", { exact: true })).toHaveValue(
+    "Rimi",
+  );
+  await page.locator("h1").click();
+  await page.keyboard.press("e");
+  await page.keyboard.press("n");
+  await expect(page).toHaveURL(/\/review\?tab=imports$/);
+  await expect(
+    page.getByRole("row").filter({ hasText: receipts[0].filename }),
+  ).toBeVisible();
 });

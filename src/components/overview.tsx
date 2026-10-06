@@ -1,5 +1,5 @@
 "use client";
-import { useState, type KeyboardEvent } from "react";
+import { useId, useState, type KeyboardEvent } from "react";
 import {
   ArrowUpRight,
   ArrowDownLeft,
@@ -55,11 +55,6 @@ export function PeriodOverview({
         {loading && <Loading />}
       </>
     );
-  const periodEnd = new Date(
-    new Date(`${data.to}T12:00:00Z`).getTime() - 86400000,
-  )
-    .toISOString()
-    .slice(0, 10);
   const fmt = (value: number) => formatMoney(value, ctx.currency);
   const totals = data.months.reduce(
     (sum, point) => ({
@@ -68,16 +63,6 @@ export function PeriodOverview({
       contributions: sum.contributions + point.investment + point.pension,
     }),
     { spending: 0, income: 0, contributions: 0 },
-  );
-  const contributionKinds = [
-    {
-      kind: "investment",
-      label: "INVESTMENT TRANSFERS",
-      totals: data.investment,
-    },
-    { kind: "pension", label: "PENSION CONTRIBUTIONS", totals: data.pension },
-  ].filter(
-    ({ totals }) => totals.history_contributed || totals.history_withdrawn,
   );
   const allCategories = analysisBreakdown(data).categories;
   const breakdown = analysisBreakdown(data, selectedMonth, category);
@@ -165,79 +150,6 @@ export function PeriodOverview({
           icon={<WalletCards size={16} />}
         />
       </div>
-      {contributionKinds.length > 0 && (
-        <section className="panel contributions-panel">
-          <SectionTitle title="Investments and pensions" />
-          <div className="metric-grid contribution-grid">
-            {contributionKinds.map(({ kind, label, totals }) => (
-              <div className="metric" key={kind}>
-                <div className="metric-label">
-                  {label}
-                  <span>
-                    <Landmark size={16} />
-                  </span>
-                </div>
-                <div className="metric-value">{fmt(totals.contributed)}</div>
-                <div className="metric-caption">Contributed in this period</div>
-                {totals.withdrawn !== 0 && (
-                  <p className="form-help">
-                    {fmt(totals.withdrawn)} returned · {fmt(totals.net)} net
-                  </p>
-                )}
-                <p className="form-help">
-                  {fmt(totals.history_contributed)} contributed in imported
-                  history through this month
-                  {totals.history_withdrawn !== 0
-                    ? ` · ${fmt(totals.history_withdrawn)} returned · ${fmt(totals.history_net)} net`
-                    : ""}
-                </p>
-                <TextLink
-                  onClick={() =>
-                    ctx.navigate(
-                      `/transactions?kind=${kind}&from=${data.from}&to=${periodEnd}&currency=${ctx.currency}`,
-                    )
-                  }
-                >
-                  View transfers
-                </TextLink>
-              </div>
-            ))}
-          </div>
-          {data.months.length > 0 && (
-            <div className="table-scroll">
-              <table className="contribution-table">
-                <thead>
-                  <tr>
-                    <th>Month</th>
-                    <th>Investments, net</th>
-                    <th>Pension, net</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.months.map((point) => (
-                    <tr key={point.month}>
-                      <td>
-                        <button
-                          className="text-link"
-                          onClick={() =>
-                            ctx.navigate(
-                              `/?month=${point.month}&currency=${ctx.currency}`,
-                            )
-                          }
-                        >
-                          {monthLabel(point.month)}
-                        </button>
-                      </td>
-                      <td>{fmt(point.investment)}</td>
-                      <td>{fmt(point.pension)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      )}
       <section className="panel">
         <SectionTitle
           title="Spending and income"
@@ -526,6 +438,130 @@ export function PeriodOverview({
   );
 }
 
+export function ContributionHistory({
+  context: ctx,
+  months,
+}: {
+  context: AppContext;
+  months: number;
+}) {
+  const { data, error, loading } = useData<SpendingAnalysis>(
+    `spending-analysis?month=${ctx.month}&currency=${ctx.currency}&months=${months}`,
+    ctx.revision,
+    30000,
+  );
+  if (!data)
+    return (
+      <>
+        <ErrorMessage message={error} />
+        {loading && <Loading />}
+      </>
+    );
+  const fmt = (value: number) => formatMoney(value, ctx.currency);
+  const periodEnd = new Date(
+    new Date(`${data.to}T12:00:00Z`).getTime() - 86400000,
+  )
+    .toISOString()
+    .slice(0, 10);
+  const contributionKinds = [
+    {
+      kind: "investment",
+      label: "INVESTMENT TRANSFERS",
+      totals: data.investment,
+    },
+    { kind: "pension", label: "PENSION CONTRIBUTIONS", totals: data.pension },
+  ].filter(
+    ({ totals }) => totals.history_contributed || totals.history_withdrawn,
+  );
+  return (
+    <>
+      <ErrorMessage message={error} />{" "}
+      {contributionKinds.length > 0 && (
+        <section className="panel contributions-panel">
+          <SectionTitle title="Contribution history" />
+          <div className="metric-grid contribution-grid">
+            {contributionKinds.map(({ kind, label, totals }) => (
+              <div className="metric" key={kind}>
+                <div className="metric-label">
+                  {label}
+                  <span>
+                    <Landmark size={16} />
+                  </span>
+                </div>
+                <div className="metric-value">{fmt(totals.contributed)}</div>
+                <div className="metric-caption">Contributed in this period</div>
+                {totals.withdrawn !== 0 && (
+                  <p className="form-help">
+                    {fmt(totals.withdrawn)} returned · {fmt(totals.net)} net
+                  </p>
+                )}
+                <p className="form-help">
+                  {fmt(totals.history_contributed)} contributed in imported
+                  history through this month
+                  {totals.history_withdrawn !== 0
+                    ? ` · ${fmt(totals.history_withdrawn)} returned · ${fmt(totals.history_net)} net`
+                    : ""}
+                </p>
+                <TextLink
+                  onClick={() =>
+                    ctx.navigate(
+                      `/transactions?kind=${kind}&from=${data.from}&to=${periodEnd}&currency=${ctx.currency}`,
+                    )
+                  }
+                >
+                  View transfers
+                </TextLink>
+              </div>
+            ))}
+          </div>
+          {data.months.length > 0 && (
+            <div className="table-scroll">
+              <table className="contribution-table">
+                <thead>
+                  <tr>
+                    <th>Month</th>
+                    <th>Investments, net</th>
+                    <th>Pension, net</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.months.map((point) => (
+                    <tr key={point.month}>
+                      <td>
+                        <button
+                          className="text-link"
+                          onClick={() =>
+                            ctx.navigate(
+                              `/?month=${point.month}&currency=${ctx.currency}`,
+                            )
+                          }
+                        >
+                          {monthLabel(point.month)}
+                        </button>
+                      </td>
+                      <td>{fmt(point.investment)}</td>
+                      <td>{fmt(point.pension)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+      {!contributionKinds.length && (
+        <section className="panel">
+          <SectionTitle title="Contribution history" />
+          <Empty
+            title="No contributions recorded"
+            text="Investment and pension transfers will appear here when imported or entered."
+          />
+        </section>
+      )}
+    </>
+  );
+}
+
 function Metric({
   label,
   value,
@@ -569,9 +605,11 @@ function chartScale(values: number[]) {
 function ChartAxes({
   scale,
   currency,
+  width,
 }: {
   scale: ReturnType<typeof chartScale>;
   currency: string;
+  width: number;
 }) {
   return (
     <g aria-hidden="true">
@@ -579,7 +617,7 @@ function ChartAxes({
         <g key={index}>
           <line
             x1="100"
-            x2="630"
+            x2={width - 20}
             y1={scale.y(tick)}
             y2={scale.y(tick)}
             stroke="var(--line)"
@@ -601,11 +639,13 @@ function ChartAxes({
       ))}
       <line
         x1="100"
-        x2="630"
+        x2={width - 20}
         y1={scale.y(0)}
         y2={scale.y(0)}
         stroke="var(--muted)"
-        strokeOpacity="0.5"
+        strokeOpacity="0.75"
+        strokeDasharray="5 4"
+        vectorEffect="non-scaling-stroke"
       />
     </g>
   );
@@ -636,7 +676,9 @@ function CashFlowChart({
     income: true,
     cumulativeNetCashFlow: true,
   });
+  const clipId = useId();
   const points = cumulativeCashFlow(months);
+  const width = chartWidth(points.length);
   const [hover, setHover] = useState("");
   const scale = chartScale(
     points.flatMap((point) => [
@@ -646,6 +688,16 @@ function CashFlowChart({
     ]),
   );
   const detail = points.find((point) => point.month === (hover || selected));
+  const zeroY = scale.y(0);
+  const cashLine = points
+    .map(
+      (point, index) =>
+        `${chartX(index, points.length)},${scale.y(point.cumulativeNetCashFlow)}`,
+    )
+    .join(" ");
+  const cashArea = points.length
+    ? `${chartX(0, points.length)},${zeroY} ${cashLine} ${chartX(points.length - 1, points.length)},${zeroY}`
+    : "";
   const toggle = (key: keyof typeof series) =>
     setSeries((value) =>
       value[key] &&
@@ -672,7 +724,7 @@ function CashFlowChart({
                       ? "var(--green)"
                       : key === "income"
                         ? "#a7bca2"
-                        : "#6388a1",
+                        : "linear-gradient(90deg, var(--green) 50%, #bf514b 50%)",
                   ...(key === "cumulativeNetCashFlow"
                     ? { width: 18, height: 3, borderRadius: 0 }
                     : {}),
@@ -687,15 +739,52 @@ function CashFlowChart({
           ),
         )}
       </div>
+      {series.cumulativeNetCashFlow && (
+        <div
+          className="analysis-series"
+          style={{ fontSize: 11, color: "var(--muted)" }}
+        >
+          <span>
+            <i style={{ background: "var(--green)" }} /> Positive net cash
+          </span>
+          <span>
+            <i style={{ background: "#bf514b" }} /> Negative net cash
+          </span>
+        </div>
+      )}
       <svg
         className="analysis-chart"
-        viewBox={`0 0 ${chartWidth(points.length)} 250`}
+        viewBox={`0 0 ${width} 250`}
         style={{
           minWidth: points.length > 6 ? chartWidth(points.length) : undefined,
         }}
         aria-label="Period spending, income and cumulative net cash flow chart"
       >
-        <ChartAxes scale={scale} currency={currency} />
+        <defs>
+          <clipPath id={`${clipId}-positive`} clipPathUnits="userSpaceOnUse">
+            <rect x="100" y="0" width={width - 120} height={zeroY} />
+          </clipPath>
+          <clipPath id={`${clipId}-negative`} clipPathUnits="userSpaceOnUse">
+            <rect x="100" y={zeroY} width={width - 120} height={250 - zeroY} />
+          </clipPath>
+        </defs>
+        {series.cumulativeNetCashFlow && (
+          <g pointerEvents="none" aria-hidden="true">
+            <polygon
+              points={cashArea}
+              fill="var(--green)"
+              fillOpacity="0.09"
+              clipPath={`url(#${clipId}-positive)`}
+            />
+            <polygon
+              points={cashArea}
+              fill="#bf514b"
+              fillOpacity="0.09"
+              clipPath={`url(#${clipId}-negative)`}
+            />
+          </g>
+        )}
+        <ChartAxes scale={scale} currency={currency} width={width} />
         {points.map((point, index) => {
           const x = chartX(index, points.length);
           const action = () => onSelect(point.month);
@@ -750,21 +839,21 @@ function CashFlowChart({
         })}
         {series.cumulativeNetCashFlow && (
           <g pointerEvents="none">
-            <polyline
-              aria-label="Cumulative net cash flow line"
-              fill="none"
-              stroke="#6388a1"
-              strokeWidth="3"
-              strokeLinejoin="round"
-              strokeLinecap="round"
-              vectorEffect="non-scaling-stroke"
-              points={points
-                .map(
-                  (point, index) =>
-                    `${chartX(index, points.length)},${scale.y(point.cumulativeNetCashFlow)}`,
-                )
-                .join(" ")}
-            />
+            <g aria-label="Cumulative net cash flow line">
+              {(["positive", "negative"] as const).map((sign) => (
+                <polyline
+                  key={sign}
+                  fill="none"
+                  stroke={sign === "positive" ? "var(--green)" : "#bf514b"}
+                  strokeWidth="3"
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  vectorEffect="non-scaling-stroke"
+                  clipPath={`url(#${clipId}-${sign})`}
+                  points={cashLine}
+                />
+              ))}
+            </g>
             {points.map((point, index) => (
               <circle
                 key={point.month}
@@ -772,7 +861,13 @@ function CashFlowChart({
                 cy={scale.y(point.cumulativeNetCashFlow)}
                 r={selected === point.month || hover === point.month ? 6 : 4}
                 fill="var(--surface)"
-                stroke="#6388a1"
+                stroke={
+                  point.cumulativeNetCashFlow < 0
+                    ? "#bf514b"
+                    : point.cumulativeNetCashFlow > 0
+                      ? "var(--green)"
+                      : "var(--muted)"
+                }
                 strokeWidth="2"
                 vectorEffect="non-scaling-stroke"
               />
@@ -786,7 +881,17 @@ function CashFlowChart({
             <strong>{monthLabel(detail.month)}</strong>
             <span>Spending {formatMoney(detail.spending, currency)}</span>
             <span>Income {formatMoney(detail.income, currency)}</span>
-            <span>
+            <span
+              style={{
+                color:
+                  detail.cumulativeNetCashFlow < 0
+                    ? "#bf514b"
+                    : detail.cumulativeNetCashFlow > 0
+                      ? "var(--green)"
+                      : "var(--muted)",
+                fontWeight: 600,
+              }}
+            >
               Cumulative net cash flow{" "}
               {formatMoney(detail.cumulativeNetCashFlow, currency)}
             </span>
@@ -838,7 +943,11 @@ function CategoryTrend({
         }}
         aria-label="Monthly category spending trend"
       >
-        <ChartAxes scale={scale} currency={currency} />
+        <ChartAxes
+          scale={scale}
+          currency={currency}
+          width={chartWidth(points.length)}
+        />
         <polyline
           fill="none"
           stroke={color}

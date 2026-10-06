@@ -17,7 +17,6 @@ import {
   ChevronRight,
   Menu,
   X,
-  Plus,
   Upload,
   CheckCheck,
   CircleHelp,
@@ -30,15 +29,10 @@ import {
   Loading,
   ErrorMessage,
   Empty,
-  SectionTitle,
-  TextLink,
-  EntryTable,
   initials,
   type AppContext,
   type AppState,
-  type Entry,
 } from "./ui";
-import { formatMoney } from "../lib/money";
 import {
   TransactionsView,
   TransactionDetailView,
@@ -46,6 +40,8 @@ import {
   ReceiptDetailView,
 } from "./records";
 import { PeriodOverview } from "./overview";
+import { FinancialOverviewView } from "./financial-overview";
+import { GoalsView } from "./goals";
 import { ReviewView } from "./review";
 import { ConnectionsView, RulesView, SettingsView } from "./settings";
 import { AdvancedView } from "./bookkeeping";
@@ -61,6 +57,8 @@ const navigation = [
   { path: "/transactions", label: "Transactions", icon: WalletCards },
   { path: "/receipts", label: "Receipts", icon: ReceiptText },
   { path: "/review", label: "Review", icon: ListFilter },
+  { path: "/goals", label: "Goals", icon: Landmark },
+  { path: "/analysis", label: "Spending analysis", icon: BarChart3 },
   { path: "/connections", label: "Connections", icon: Landmark },
   { path: "/rules", label: "Rules", icon: SlidersHorizontal },
   { path: "/settings", label: "Settings", icon: Settings2 },
@@ -70,13 +68,13 @@ export default function ExpenseApp() {
   const router = useRouter(),
     pathname = usePathname(),
     search = useSearchParams();
-  const requestedMonths = Number(search.get("months") || 1);
+  const requestedMonths = Number(search.get("months") || 6);
   const [periodMonths, setPeriodMonths] = useState(
     Number.isInteger(requestedMonths) &&
       requestedMonths >= 1 &&
       requestedMonths <= 12
       ? requestedMonths
-      : 1,
+      : 6,
   );
   const [authenticated, setAuthenticated] = useState(false),
     [checking, setChecking] = useState(true),
@@ -100,13 +98,17 @@ export default function ExpenseApp() {
     navigate = (path: string) => {
       setMobile(false);
       const target = new URL(path, window.location.origin);
-      if (["/", "/six-month", "/transactions"].includes(target.pathname)) {
+      if (
+        ["/", "/six-month", "/transactions", "/analysis", "/goals"].includes(
+          target.pathname,
+        )
+      ) {
         if (!target.searchParams.has("month"))
           target.searchParams.set("month", month);
         if (!target.searchParams.has("currency"))
           target.searchParams.set("currency", currency);
       }
-      if (target.pathname === "/" && !target.searchParams.has("months"))
+      if (target.pathname === "/analysis" && !target.searchParams.has("months"))
         target.searchParams.set("months", String(periodMonths));
       router.push(`${target.pathname}${target.search}`);
     };
@@ -335,9 +337,15 @@ export default function ExpenseApp() {
               </h1>
             </div>
             {(path.length <= 1 || active === "advanced") &&
-              ["overview", "transactions", "advanced"].includes(active) && (
+              [
+                "overview",
+                "analysis",
+                "goals",
+                "transactions",
+                "advanced",
+              ].includes(active) && (
                 <div className="page-controls">
-                  {active === "overview" && (
+                  {active === "analysis" && (
                     <select
                       aria-label="Period length"
                       value={periodMonths}
@@ -387,7 +395,7 @@ export default function ExpenseApp() {
                         <ISODateInput
                           precision="month"
                           aria-label={
-                            active === "overview" ? "Period ending" : "Month"
+                            active === "analysis" ? "Period ending" : "Month"
                           }
                           value={month}
                           onChange={(e) =>
@@ -407,18 +415,20 @@ export default function ExpenseApp() {
           </div>
           <ErrorMessage message={state.error} />
           {active === "overview" && (
-            <div className="view-stack">
-              <PeriodOverview
-                key={`${month}-${currency}-${periodMonths}`}
-                context={context}
-                months={periodMonths}
-              />
-              <OverviewDetails
-                key={`details-${month}-${currency}-${periodMonths}`}
-                context={context}
-                months={periodMonths}
-              />
-            </div>
+            <FinancialOverviewView
+              key={`${month}-${currency}`}
+              context={context}
+            />
+          )}
+          {active === "analysis" && (
+            <PeriodOverview
+              key={`${month}-${currency}-${periodMonths}`}
+              context={context}
+              months={periodMonths}
+            />
+          )}
+          {active === "goals" && (
+            <GoalsView key={`${month}-${currency}`} context={context} />
           )}
           {active === "transactions" &&
             (path[1] ? (
@@ -428,7 +438,7 @@ export default function ExpenseApp() {
             ))}
           {active === "receipts" &&
             (path[1] ? (
-              <ReceiptDetailView context={context} id={path[1]} />
+              <ReceiptDetailView key={path[1]} context={context} id={path[1]} />
             ) : (
               <ReceiptsView context={context} />
             ))}
@@ -476,7 +486,14 @@ export default function ExpenseApp() {
         })}
         <button
           className={
-            ["connections", "rules", "settings"].includes(active)
+            [
+              "connections",
+              "rules",
+              "settings",
+              "goals",
+              "analysis",
+              "advanced",
+            ].includes(active)
               ? "active"
               : ""
           }
@@ -612,194 +629,6 @@ function AuthScreen({ setup, onDone }: { setup: boolean; onDone: () => void }) {
           </button>
         </form>
       </div>
-    </div>
-  );
-}
-type Summary = {
-  from: string;
-  to: string;
-  spending: number;
-  gross_spending: number;
-  refunds: number;
-  income: number;
-  net_cash_flow: number;
-  transactions: number;
-  expense_count: number;
-  receipt_count: number;
-  receipt_required_count: number;
-  receipt_excluded_count: number;
-  uncategorized: { amount: number; count: number };
-  categories: Array<{
-    id: string;
-    name: string;
-    color: string;
-    amount: number;
-    count: number;
-  }>;
-  merchants: Array<{ merchant: string; amount: number; count: number }>;
-  trend: Array<{
-    month: string;
-    spending: number;
-    income: number;
-    investment: number;
-    pension: number;
-  }>;
-  recent: Entry[];
-  pending: { count: number; amount: number };
-  cash: { amount: number };
-};
-function OverviewDetails({
-  context: ctx,
-  months,
-}: {
-  context: AppContext;
-  months: number;
-}) {
-  const { data, error, loading } = useData<Summary>(
-    `overview?month=${ctx.month}&currency=${ctx.currency}&months=${months}`,
-    ctx.revision,
-    30000,
-  );
-  if (!data)
-    return (
-      <>
-        <ErrorMessage message={error} />
-        {loading && <Loading />}
-      </>
-    );
-  const fmt = (value: number) => formatMoney(value, ctx.currency),
-    coverage = data.receipt_required_count
-      ? Math.round((data.receipt_count / data.receipt_required_count) * 100)
-      : 0;
-  const periodEnd = new Date(
-    new Date(`${data.to}T12:00:00Z`).getTime() - 86400000,
-  )
-    .toISOString()
-    .slice(0, 10);
-  const periodTransactions = `/transactions?from=${data.from}&to=${periodEnd}&currency=${ctx.currency}`;
-  return (
-    <div className="view-stack">
-      <ErrorMessage message={error} />
-      {!ctx.state.accounts.some((a) => a.source === "bank") && (
-        <div className="welcome-banner">
-          <div className="welcome-icon">
-            <Landmark size={25} />
-          </div>
-          <div>
-            <strong>No bank connected</strong>
-            <p>Connect a bank to import transactions.</p>
-          </div>
-          <button
-            className="button primary"
-            onClick={() => ctx.navigate("/connections")}
-          >
-            Connect a bank
-            <ArrowUpRight size={16} />
-          </button>
-        </div>
-      )}
-      <div className="overview-grid lower">
-        <div className="metric">
-          <div className="metric-label">
-            RECEIPT COVERAGE
-            <span>
-              <ReceiptText size={16} />
-            </span>
-          </div>
-          <div className="metric-value">
-            {data.receipt_required_count ? coverage : "—"}
-            {data.receipt_required_count > 0 && (
-              <span className="metric-unit">%</span>
-            )}
-          </div>
-          <div className="metric-caption">
-            {data.receipt_required_count
-              ? `${data.receipt_count} of ${data.receipt_required_count} payments linked`
-              : "No receipts required"}
-            {data.receipt_excluded_count > 0 && (
-              <div>
-                {data.receipt_excluded_count}{" "}
-                {data.receipt_excluded_count === 1 ? "payment" : "payments"}{" "}
-                excluded
-              </div>
-            )}
-          </div>
-          <div className="progress">
-            <i style={{ width: `${coverage}%` }} />
-          </div>
-        </div>
-        <section className="panel attention-panel">
-          <SectionTitle title="Needs review" />
-          <div className="attention-list">
-            <button onClick={() => ctx.navigate("/review")}>
-              <span className="attention-icon">
-                <ListFilter size={19} />
-              </span>
-              <div>
-                <strong>
-                  {data.uncategorized.count} payments to categorize
-                </strong>
-                <small>
-                  {fmt(data.uncategorized.amount)} still awaiting a category
-                </small>
-              </div>
-              <ChevronRight size={17} />
-            </button>
-            <button onClick={() => ctx.navigate("/receipts")}>
-              <span className="attention-icon">
-                <ReceiptText size={19} />
-              </span>
-              <div>
-                <strong>{ctx.state.review.receipts} receipts to review</strong>
-                <small>Check products and connect payments</small>
-              </div>
-              <ChevronRight size={17} />
-            </button>
-            <button onClick={() => ctx.navigate("/transactions?status=PDNG")}>
-              <span className="attention-icon">
-                <WalletCards size={19} />
-              </span>
-              <div>
-                <strong>{data.pending.count} pending payments</strong>
-                <small>{fmt(data.pending.amount)} excluded until booked</small>
-              </div>
-              <ChevronRight size={17} />
-            </button>
-            {data.cash.amount > 0 && (
-              <div className="notice">
-                {fmt(data.cash.amount)} in cash withdrawals remains unallocated.
-                Record cash purchases to allocate it.
-              </div>
-            )}
-          </div>
-        </section>
-      </div>
-      <section className="panel">
-        <SectionTitle
-          title="Recent transactions"
-          action={
-            <TextLink onClick={() => ctx.navigate(periodTransactions)}>
-              All transactions
-            </TextLink>
-          }
-        />
-        {data.recent.length ? (
-          <EntryTable entries={data.recent} navigate={ctx.navigate} />
-        ) : (
-          <Empty
-            title="No transactions in this period"
-            text="Connect a bank or record a cash expense to get started."
-          >
-            <button
-              className="button secondary"
-              onClick={() => ctx.navigate("/transactions?new=true")}
-            >
-              <Plus size={16} />
-              Add cash expense
-            </button>
-          </Empty>
-        )}
-      </section>
     </div>
   );
 }

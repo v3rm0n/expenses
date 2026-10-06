@@ -1,5 +1,8 @@
 "use client";
+import { ReceiptCoverage } from "./financial-overview";
 import { useDialogFocus } from "../hooks/use-dialog-focus";
+import { useReviewShortcuts } from "../hooks/use-review-shortcuts";
+import { ReviewShortcuts } from "./review-shortcuts";
 import { ISODateInput } from "./iso-date-input";
 import { TransactionJournal } from "./accounting";
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -677,6 +680,9 @@ export function TransactionDetailView({
     ),
     [saveError, setSaveError] = useState<string | null>(null),
     [busy, setBusy] = useState(false);
+  const shortcutRef = useReviewShortcuts(
+    busy || receiptBusy || Boolean(review?.advancing),
+  );
   const canApplySimilar =
     Boolean(data?.merchant.trim()) &&
     !automatic &&
@@ -809,7 +815,16 @@ export function TransactionDetailView({
     }
   };
   return (
-    <div className="view-stack">
+    <div className="view-stack" ref={shortcutRef}>
+      <ReviewShortcuts
+        actions={[
+          ["Ctrl/⌘ + Enter", review ? "Save and next" : "Save changes"],
+          ...(review ? [["N", "Skip for now"] as [string, string]] : []),
+          ["C", "Focus category"],
+          ["R", "Toggle receipt requirement"],
+          ["U", "Import receipt"],
+        ]}
+      />
       {!review && (
         <TextLink onClick={() => ctx.navigate(returnTo)}>
           <ArrowLeft size={15} />
@@ -926,6 +941,9 @@ export function TransactionDetailView({
                   {rows.map((row, i) => (
                     <div className="allocation-row" key={i}>
                       <select
+                        data-shortcut={i === 0 ? "c" : undefined}
+                        data-shortcut-focus
+                        aria-keyshortcuts={i === 0 ? "C" : undefined}
                         aria-label={`Category ${i + 1}`}
                         value={row.category_id}
                         onChange={(e) =>
@@ -1067,6 +1085,8 @@ export function TransactionDetailView({
             <div className="button-row">
               <button
                 className="button primary"
+                data-shortcut="save"
+                aria-keyshortcuts="Control+Enter Meta+Enter"
                 disabled={
                   busy ||
                   receiptBusy ||
@@ -1090,6 +1110,8 @@ export function TransactionDetailView({
                 <button
                   type="button"
                   className="button secondary"
+                  data-shortcut="n"
+                  aria-keyshortcuts="N"
                   disabled={busy || receiptBusy || review.advancing}
                   onClick={() => void review.onNext().catch(() => {})}
                 >
@@ -1116,6 +1138,8 @@ export function TransactionDetailView({
               <label className="checkbox">
                 <input
                   type="checkbox"
+                  data-shortcut="r"
+                  aria-keyshortcuts="R"
                   checked={receiptNotRequired}
                   disabled={receiptBusy || busy || review?.advancing}
                   onChange={(e) =>
@@ -1169,6 +1193,8 @@ export function TransactionDetailView({
               }
             >
               <button
+                data-shortcut="u"
+                aria-keyshortcuts="U"
                 className="button secondary"
                 onClick={() =>
                   ctx.navigate(
@@ -1189,6 +1215,8 @@ export function TransactionDetailView({
           !receiptNotRequired ? (
             <div className="padded-form">
               <button
+                data-shortcut="u"
+                aria-keyshortcuts="U"
                 className="button secondary"
                 onClick={() =>
                   ctx.navigate(
@@ -1275,6 +1303,7 @@ export function ReceiptsView({ context: ctx }: { context: AppContext }) {
   const receipts = data?.rows || [];
   return (
     <div className="view-stack">
+      <ReceiptCoverage context={ctx} />
       {reviewReturn && (
         <TextLink onClick={() => ctx.navigate(reviewReturn)}>
           <ArrowLeft size={15} />
@@ -1562,6 +1591,17 @@ export function ReceiptDetailView({
     [busy, setBusy] = useState(false),
     [candidate, setCandidate] = useState(""),
     [linkAmount, setLinkAmount] = useState("");
+  const shortcutRef = useReviewShortcuts(busy);
+  const receiptReview =
+    returnTo.startsWith("/review") &&
+    new URLSearchParams(returnTo.split("?")[1]).get("tab") === "imports";
+  const reviewQueue = useData<{ receipts: Receipt[] }>(
+    receiptReview ? "review" : null,
+    ctx.revision,
+  );
+  const currentReceiptIndex =
+    reviewQueue.data?.receipts.findIndex((receipt) => receipt.id === id) ?? -1;
+  const nextReceipt = reviewQueue.data?.receipts[currentReceiptIndex + 1];
   const selectedHint = useRef(false);
   useEffect(() => {
     if (!data || selectedHint.current) return;
@@ -1692,12 +1732,58 @@ export function ReceiptDetailView({
     /* Display an invalid amount notice until corrected. */
   }
   return (
-    <div className="view-stack">
-      <TextLink onClick={() => ctx.navigate(returnTo)}>
+    <div className="view-stack" ref={shortcutRef}>
+      <ReviewShortcuts
+        actions={[
+          ["Ctrl/⌘ + Enter", "Save and validate"],
+          ["E", "Edit / cancel editing"],
+          ["L", "Link selected payment"],
+          ["B", "Back to list"],
+          ...(receiptReview ? [["N", "Next receipt"] as [string, string]] : []),
+        ]}
+      />
+      {receiptReview && (
+        <div className="button-row">
+          <button
+            className="button secondary"
+            data-shortcut="n"
+            aria-keyshortcuts="N"
+            disabled={
+              busy ||
+              editing ||
+              reviewQueue.loading ||
+              Boolean(reviewQueue.error)
+            }
+            onClick={() =>
+              ctx.navigate(
+                nextReceipt
+                  ? `/receipts/${nextReceipt.id}?returnTo=${encodeURIComponent(returnTo)}`
+                  : returnTo,
+              )
+            }
+          >
+            {nextReceipt ? "Next receipt" : "Finish receipt review"}
+            <ChevronRight size={16} />
+          </button>
+          <small className="form-help">
+            Skipped receipts stay in the review list. Save or cancel edits
+            before moving on.
+          </small>
+        </div>
+      )}
+      <button
+        className="text-link"
+        data-shortcut="b"
+        aria-keyshortcuts="B"
+        disabled={busy || editing}
+        onClick={() => ctx.navigate(returnTo)}
+      >
         <ArrowLeft size={15} />
         {returnTo.startsWith("/review") ? "Back to review" : "All receipts"}
-      </TextLink>
-      <ErrorMessage message={error || saveError || data.error} />
+      </button>
+      <ErrorMessage
+        message={error || saveError || data.error || reviewQueue.error}
+      />
       {data.issues.length > 0 && (
         <div className="notice warning">
           <div>
@@ -1719,6 +1805,8 @@ export function ReceiptDetailView({
                 <button
                   className="button secondary"
                   disabled={busy}
+                  data-shortcut="e"
+                  aria-keyshortcuts="E"
                   onClick={() => setEditing(!editing)}
                 >
                   {editing ? "Cancel editing" : "Edit receipt"}
@@ -1888,7 +1976,12 @@ export function ReceiptDetailView({
                   />
                   Remember these product categories for future receipts
                 </label>
-                <button className="button primary" disabled={busy}>
+                <button
+                  className="button primary"
+                  data-shortcut="save"
+                  aria-keyshortcuts="Control+Enter Meta+Enter"
+                  disabled={busy}
+                >
                   {busy ? "Saving…" : "Save and validate"}
                 </button>
               </>
@@ -2080,7 +2173,9 @@ export function ReceiptDetailView({
                   </label>
                   <button
                     className="button primary wide"
-                    disabled={!candidate || busy}
+                    data-shortcut="l"
+                    aria-keyshortcuts="L"
+                    disabled={!candidate || busy || editing}
                     onClick={() =>
                       perform(`receipts/${id}/link`, {
                         transactionId: candidate,
@@ -2211,7 +2306,11 @@ export function ImportReviewView({ context: ctx }: { context: AppContext }) {
             title="Receipts to review or link"
             description="Validate amounts and connect each receipt to its payment."
           />
-          <ReceiptTable receipts={data.receipts} context={ctx} />
+          <ReceiptTable
+            receipts={data.receipts}
+            context={ctx}
+            returnTo="/review?tab=imports"
+          />
         </section>
       )}
       {data.emails.length > 0 && (

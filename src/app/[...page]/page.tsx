@@ -14,11 +14,13 @@ export default async function Page({
     for (const [key, value] of Object.entries(await searchParams))
       if (typeof value === "string") query.set(key, value);
     if (!query.has("months")) query.set("months", "6");
-    redirect(`/?${query}`);
+    redirect(`/analysis?${query}`);
   }
   if (
     ![
       "six-month",
+      "analysis",
+      "goals",
       "transactions",
       "receipts",
       "review",
@@ -39,6 +41,7 @@ export default async function Page({
         "accounts",
         "statements",
       ].includes(page[1])) ||
+    (["analysis", "goals"].includes(page[0]) && page.length !== 1) ||
     page.length > 2
   )
     notFound();

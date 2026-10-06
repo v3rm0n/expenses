@@ -292,11 +292,24 @@ export async function processReceipt(id: string) {
         [id],
         db,
       );
+      // Older Partnerkaart PDFs went through the generic parser, which left
+      // the barcode, unit price and quantity in the product description.
+      const previousDescription = (description: string) =>
+        normalize(
+          parsed.retailer === "partnerkaart" &&
+            /^Toote nimi\s+Tootekood\s+Hind\s+Kogus\s+Summa\s*$/im.test(text)
+            ? description.replace(
+                /\s+\d{8,14}\s+[−-]?\d+[.,]\d{2}\s+[−-]?\d+(?:[.,]\d+)?$/,
+                "",
+              )
+            : description,
+        );
       for (const item of parsed.items) {
         const previous = oldItems.find(
           (old) =>
             old.manual &&
-            normalize(old.description) === normalize(item.description),
+            previousDescription(old.description) ===
+              normalize(item.description),
         );
         const mapping = mappings.find(
           (mapping) => mapping.product === normalize(item.description),

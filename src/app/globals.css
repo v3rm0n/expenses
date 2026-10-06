@@ -2994,3 +2994,23 @@ input[type="color"]::-webkit-color-swatch {
     flex-direction: column;
   }
 }
+
+.review-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.review-shortcuts span {
+  white-space: nowrap;
+}
+.review-shortcuts kbd {
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+}
