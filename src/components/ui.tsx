@@ -283,6 +283,7 @@ export type AppState = {
   appUrl: string;
 };
 export type AppContext = {
+  showPercentages?: boolean;
   state: AppState;
   month: string;
   currency: string;

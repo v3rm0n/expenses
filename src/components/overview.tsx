@@ -7,6 +7,7 @@ import {
   CalendarDays,
   Landmark,
 } from "lucide-react";
+import { amountFormatter } from "../lib/amount-display";
 import { currencyScale, formatMoney } from "../lib/money";
 import { monthLabel } from "../lib/dates";
 import {
@@ -55,7 +56,6 @@ export function PeriodOverview({
         {loading && <Loading />}
       </>
     );
-  const fmt = (value: number) => formatMoney(value, ctx.currency);
   const totals = data.months.reduce(
     (sum, point) => ({
       spending: sum.spending + point.spending,
@@ -64,6 +64,12 @@ export function PeriodOverview({
     }),
     { spending: 0, income: 0, contributions: 0 },
   );
+  const percentages = ctx.showPercentages ?? false;
+  const base = data.months.reduce(
+    (sum, point) => sum + Math.max(0, point.spending),
+    0,
+  );
+  const fmt = amountFormatter(ctx.currency, percentages, base);
   const allCategories = analysisBreakdown(data).categories;
   const breakdown = analysisBreakdown(data, selectedMonth, category);
   const selectedCategory = allCategories.find((row) => row.id === category);
@@ -110,6 +116,13 @@ export function PeriodOverview({
   return (
     <div className="view-stack analysis-view">
       <ErrorMessage message={error} />
+      {percentages && (
+        <p className="muted small" role="status">
+          Amounts are percentages of the period’s positive monthly net spending.
+          The same base applies to charts and filtered breakdowns. — means no
+          positive base is available.
+        </p>
+      )}
       <div className="analysis-period">
         <div>
           <strong>
@@ -158,6 +171,7 @@ export function PeriodOverview({
         <CashFlowChart
           months={data.months}
           currency={ctx.currency}
+          formatAmount={percentages ? fmt : undefined}
           selected={selectedMonth}
           onSelect={selectMonth}
         />
@@ -429,6 +443,7 @@ export function PeriodOverview({
         <CategoryTrend
           points={breakdown.categoryTrend}
           currency={ctx.currency}
+          formatAmount={percentages ? fmt : undefined}
           color={selectedCategory?.color || "var(--green)"}
           selected={selectedMonth}
           onSelect={selectMonth}
@@ -605,10 +620,12 @@ function chartScale(values: number[]) {
 function ChartAxes({
   scale,
   currency,
+  formatAmount,
   width,
 }: {
   scale: ReturnType<typeof chartScale>;
   currency: string;
+  formatAmount?: (value: number) => string;
   width: number;
 }) {
   return (
@@ -628,12 +645,14 @@ function ChartAxes({
             textAnchor="end"
             className="analysis-axis"
           >
-            {new Intl.NumberFormat("en-IE", {
-              style: "currency",
-              currency,
-              notation: "compact",
-              maximumFractionDigits: 1,
-            }).format(tick / 10 ** currencyScale(currency))}
+            {formatAmount
+              ? formatAmount(tick)
+              : new Intl.NumberFormat("en-IE", {
+                  style: "currency",
+                  currency,
+                  notation: "compact",
+                  maximumFractionDigits: 1,
+                }).format(tick / 10 ** currencyScale(currency))}
           </text>
         </g>
       ))}
@@ -663,11 +682,13 @@ function chartX(index: number, count: number) {
 function CashFlowChart({
   months,
   currency,
+  formatAmount,
   selected,
   onSelect,
 }: {
   months: MonthlyTotals[];
   currency: string;
+  formatAmount?: (value: number) => string;
   selected: string;
   onSelect: (month: string) => void;
 }) {
@@ -679,6 +700,7 @@ function CashFlowChart({
   const clipId = useId();
   const points = cumulativeCashFlow(months);
   const width = chartWidth(points.length);
+  const fmt = formatAmount ?? ((value: number) => formatMoney(value, currency));
   const [hover, setHover] = useState("");
   const scale = chartScale(
     points.flatMap((point) => [
@@ -784,7 +806,12 @@ function CashFlowChart({
             />
           </g>
         )}
-        <ChartAxes scale={scale} currency={currency} width={width} />
+        <ChartAxes
+          scale={scale}
+          currency={currency}
+          formatAmount={formatAmount}
+          width={width}
+        />
         {points.map((point, index) => {
           const x = chartX(index, points.length);
           const action = () => onSelect(point.month);
@@ -794,7 +821,7 @@ function CashFlowChart({
               role="button"
               tabIndex={0}
               className="analysis-mark"
-              aria-label={`Explore ${monthLabel(point.month)}: spending ${formatMoney(point.spending, currency)}, income ${formatMoney(point.income, currency)}, cumulative net cash flow ${formatMoney(point.cumulativeNetCashFlow, currency)}`}
+              aria-label={`Explore ${monthLabel(point.month)}: spending ${fmt(point.spending)}, income ${fmt(point.income)}, cumulative net cash flow ${fmt(point.cumulativeNetCashFlow)}`}
               aria-pressed={selected === point.month}
               onClick={action}
               onKeyDown={(event) => activate(event, action)}
@@ -879,8 +906,8 @@ function CashFlowChart({
         {detail ? (
           <>
             <strong>{monthLabel(detail.month)}</strong>
-            <span>Spending {formatMoney(detail.spending, currency)}</span>
-            <span>Income {formatMoney(detail.income, currency)}</span>
+            <span>Spending {fmt(detail.spending)}</span>
+            <span>Income {fmt(detail.income)}</span>
             <span
               style={{
                 color:
@@ -892,17 +919,15 @@ function CashFlowChart({
                 fontWeight: 600,
               }}
             >
-              Cumulative net cash flow{" "}
-              {formatMoney(detail.cumulativeNetCashFlow, currency)}
+              Cumulative net cash flow {fmt(detail.cumulativeNetCashFlow)}
             </span>
             <span>
               Net cash flow{" "}
-              {formatMoney(
+              {fmt(
                 detail.income -
                   detail.spending -
                   detail.investment -
                   detail.pension,
-                currency,
               )}
             </span>
           </>
@@ -920,16 +945,19 @@ function CashFlowChart({
 function CategoryTrend({
   points,
   currency,
+  formatAmount,
   color,
   selected,
   onSelect,
 }: {
   points: { month: string; amount: number }[];
   currency: string;
+  formatAmount?: (value: number) => string;
   color: string;
   selected: string;
   onSelect: (month: string) => void;
 }) {
+  const fmt = formatAmount ?? ((value: number) => formatMoney(value, currency));
   const [hover, setHover] = useState("");
   const scale = chartScale(points.map((point) => point.amount));
   const detail = points.find((point) => point.month === (hover || selected));
@@ -946,6 +974,7 @@ function CategoryTrend({
         <ChartAxes
           scale={scale}
           currency={currency}
+          formatAmount={formatAmount}
           width={chartWidth(points.length)}
         />
         <polyline
@@ -969,7 +998,7 @@ function CategoryTrend({
               className="analysis-mark"
               role="button"
               tabIndex={0}
-              aria-label={`Explore ${monthLabel(point.month)}: ${formatMoney(point.amount, currency)} net spending`}
+              aria-label={`Explore ${monthLabel(point.month)}: ${fmt(point.amount)} net spending`}
               aria-pressed={selected === point.month}
               onClick={action}
               onKeyDown={(event) => activate(event, action)}
@@ -1004,7 +1033,7 @@ function CategoryTrend({
         {detail ? (
           <>
             <strong>{monthLabel(detail.month)}</strong>
-            <span>Net spending {formatMoney(detail.amount, currency)}</span>
+            <span>Net spending {fmt(detail.amount)}</span>
           </>
         ) : (
           <span>

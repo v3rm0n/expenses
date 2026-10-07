@@ -130,16 +130,20 @@
   .page-controls {
     width: 100%;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 92px;
+    grid-template-columns: minmax(0, 1fr);
     gap: 10px;
     margin: 0;
   }
+  .page-controls > .amount-display-switch {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: start;
+  }
+  .page-controls:has([aria-label="Period length"]) > .amount-display-switch {
+    grid-row: 3;
+  }
   .page-controls > select {
     width: 100%;
-  }
-  .page-controls .currency-select {
-    grid-column: 2;
-    grid-row: 1;
   }
   .month-picker {
     grid-column: 1;

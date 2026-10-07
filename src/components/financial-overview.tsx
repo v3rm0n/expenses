@@ -7,7 +7,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import { monthLabel } from "../lib/dates";
-import { formatMoney } from "../lib/money";
+import { amountFormatter } from "../lib/amount-display";
 import type { FinancialOverview } from "../lib/spending-plan";
 import {
   useData,
@@ -23,15 +23,18 @@ import {
 export function GoalProgress({
   data,
   currency,
+  percentages = false,
 }: {
   data: FinancialOverview;
   currency: string;
+  percentages?: boolean;
 }) {
-  const fmt = (amount: number) => formatMoney(amount, currency);
   return (
     <div className="goal-cards">
       {(["investment", "pension"] as const).map((kind) => {
         const goal = data.outlook[kind];
+        const fmt = amountFormatter(currency, percentages, goal.target);
+        const annualFmt = amountFormatter(currency, percentages, goal.annual);
         return (
           <article className="goal-card" key={kind}>
             <div className="goal-heading">
@@ -78,7 +81,7 @@ export function GoalProgress({
             {goal.annual > 0 && (
               <>
                 <p className="goal-annual">
-                  {fmt(goal.yearNet)} / {fmt(goal.annual)} in{" "}
+                  {annualFmt(goal.yearNet)} / {annualFmt(goal.annual)} in{" "}
                   {data.month.slice(0, 4)}
                 </p>
                 <div
@@ -92,8 +95,8 @@ export function GoalProgress({
                   <i style={{ width: `${goal.annualPercent}%` }} />
                 </div>
                 <p className="form-help">
-                  {fmt(goal.annualRemaining)} remaining this year · monthly
-                  target includes the pace needed to reach it.
+                  {annualFmt(goal.annualRemaining)} remaining this year ·
+                  monthly target includes the pace needed to reach it.
                 </p>
               </>
             )}
@@ -122,7 +125,20 @@ export function FinancialOverviewView({
       </>
     );
   const outlook = data.outlook;
-  const fmt = (amount: number) => formatMoney(amount, ctx.currency);
+  const percentages = ctx.showPercentages ?? false;
+  const base =
+    outlook.incomeBasis && outlook.incomeBasis > 0
+      ? outlook.incomeBasis
+      : outlook.spendingLimit && outlook.spendingLimit > 0
+        ? outlook.spendingLimit
+        : Math.max(0, data.spending);
+  const fmt = amountFormatter(ctx.currency, percentages, base);
+  const baseLabel =
+    outlook.incomeBasis && outlook.incomeBasis > 0
+      ? "monthly income basis"
+      : outlook.spendingLimit && outlook.spendingLimit > 0
+        ? "monthly spending limit"
+        : "monthly net spending";
   const current = outlook.status === "current";
   const past = outlook.status === "past";
   const allowance = outlook.allowance;
@@ -154,6 +170,13 @@ export function FinancialOverviewView({
   return (
     <div className="view-stack financial-overview">
       <ErrorMessage message={error} />
+      {percentages && (
+        <p className="muted small" role="status">
+          Amounts are percentages of {baseLabel}. Goals use their monthly or
+          annual targets; history uses each month’s income. — means no positive
+          base is available.
+        </p>
+      )}
       <div className="overview-context">
         <span>
           {monthLabel(ctx.month)} ·{" "}
@@ -236,21 +259,21 @@ export function FinancialOverviewView({
         <OverviewMetric
           label="LIVING EXPENSES"
           amount={data.spending}
-          currency={ctx.currency}
+          formatAmount={fmt}
           caption={`${fmt(data.income)} income received · refunds included`}
           icon={<ArrowUpRight size={16} />}
         />
         <OverviewMetric
           label="SURPLUS BEFORE CONTRIBUTIONS"
           amount={outlook.surplus}
-          currency={ctx.currency}
+          formatAmount={fmt}
           caption="Received income minus living expenses"
           icon={<WalletCards size={16} />}
         />
         <OverviewMetric
           label="REMAINING AFTER CONTRIBUTIONS"
           amount={outlook.afterContributions}
-          currency={ctx.currency}
+          formatAmount={fmt}
           caption="Actual surplus after net investments and pension"
           icon={<Target size={16} />}
         />
@@ -263,7 +286,7 @@ export function FinancialOverviewView({
                 ? outlook.forecastSpending
                 : null
           }
-          currency={ctx.currency}
+          formatAmount={fmt}
           caption={
             past
               ? "Income and goal commitments, capped by your limit"
@@ -301,7 +324,11 @@ export function FinancialOverviewView({
             </TextLink>
           }
         />
-        <GoalProgress data={data} currency={ctx.currency} />
+        <GoalProgress
+          data={data}
+          currency={ctx.currency}
+          percentages={percentages}
+        />
       </section>
       <div className="planning-columns">
         <section className="panel">
@@ -492,7 +519,11 @@ export function FinancialOverviewView({
                   />
                 </span>
                 <strong className={surplus < 0 ? "negative" : ""}>
-                  {fmt(surplus)}
+                  {amountFormatter(
+                    ctx.currency,
+                    percentages,
+                    Math.max(0, point.income),
+                  )(surplus)}
                 </strong>
               </button>
             );
@@ -556,13 +587,13 @@ function planDescription(data: FinancialOverview) {
 function OverviewMetric({
   label,
   amount,
-  currency,
+  formatAmount,
   caption,
   icon,
 }: {
   label: string;
   amount: number | null;
-  currency: string;
+  formatAmount: (amount: number) => string;
   caption: string;
   icon: React.ReactNode;
 }) {
@@ -575,7 +606,7 @@ function OverviewMetric({
       <div
         className={`metric-value ${amount !== null && amount < 0 ? "negative" : ""}`}
       >
-        {amount === null ? "—" : formatMoney(amount, currency)}
+        {amount === null ? "—" : formatAmount(amount)}
       </div>
       <div className="metric-caption">{caption}</div>
     </div>

@@ -458,7 +458,9 @@ test("filters survive detail navigation, CSV matches results, and mobile amounts
   expect(csv).not.toContain(`"${prefix} 52"`);
   expect(csv).not.toContain(`"${prefix} 53"`);
   await page.locator(".entry-table .merchant-link").first().click();
-  await expect(page.getByLabel("Currency", { exact: true })).toHaveCount(0);
+  await expect(
+    page.locator("main").getByLabel("Currency", { exact: true }),
+  ).toHaveCount(0);
   await expect(page.getByLabel("Month", { exact: true })).toHaveCount(0);
   await page
     .getByRole("button", { name: "All transactions", exact: true })
@@ -508,7 +510,9 @@ test("filters survive detail navigation, CSV matches results, and mobile amounts
   );
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("button", { name: "Receipts", exact: true }).click();
-  await expect(page.getByLabel("Currency", { exact: true })).toHaveCount(0);
+  await expect(
+    page.locator("main").getByLabel("Currency", { exact: true }),
+  ).toHaveCount(0);
 });
 
 test("Lidl connection settings keep passwords private and support pause and disconnect", async ({

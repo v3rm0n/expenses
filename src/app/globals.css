@@ -129,6 +129,7 @@ code {
   display: flex;
   flex-direction: column;
   z-index: 20;
+  overflow-y: auto;
 }
 .brand {
   display: flex;
@@ -202,7 +203,7 @@ code {
 }
 .sidebar-bottom {
   margin-top: auto;
-  padding-top: 40px;
+  padding-top: 8px;
 }
 .owner {
   display: flex;
@@ -272,7 +273,7 @@ main {
   gap: 9px;
   flex-shrink: 0;
 }
-.page-controls > select:not(.currency-select) {
+.page-controls > select {
   width: auto;
 }
 .month-picker {
@@ -305,9 +306,21 @@ main {
   width: 12px;
   opacity: 0.5;
 }
-.currency-select {
-  width: 82px;
-  font-size: 12px;
+.sidebar-currency {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: #adbdaf;
+}
+.sidebar-currency select {
+  width: 96px;
+  color: #f3f5ed;
+  background-color: var(--dark);
+  border-color: #ffffff26;
+  color-scheme: dark;
 }
 .view-stack {
   display: flex;
@@ -2228,9 +2241,6 @@ input[type="color"]::-webkit-color-swatch {
   .month-picker input {
     width: 143px;
   }
-  .currency-select {
-    width: 80px;
-  }
   .welcome-banner .button {
     margin: 0;
     width: 100%;
@@ -3013,4 +3023,30 @@ input[type="color"]::-webkit-color-swatch {
   font: inherit;
   color: var(--ink);
   background: var(--surface);
+}
+
+.amount-display-switch {
+  gap: 8px;
+}
+.amount-display-track {
+  display: inline-flex;
+  align-items: center;
+  width: 30px;
+  height: 18px;
+  padding: 3px;
+  border-radius: 20px;
+  background: var(--muted);
+}
+.amount-display-track::after {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+}
+.amount-display-switch[aria-checked="true"] .amount-display-track {
+  background: var(--green);
+}
+.amount-display-switch[aria-checked="true"] .amount-display-track::after {
+  transform: translateX(12px);
 }

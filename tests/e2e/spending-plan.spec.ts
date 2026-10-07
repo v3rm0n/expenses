@@ -217,6 +217,73 @@ test("spending plans persist, update allowance and annual goals, and work on nar
     page.getByRole("heading", { name: "Top merchants" }),
   ).toBeVisible();
   await expect(page.getByLabel("Period length")).toHaveValue("6");
+  const percentageSwitch = page.getByRole("switch", {
+    name: "Show percentages",
+  });
+  await expect(percentageSwitch).toHaveAttribute("aria-checked", "false");
+  await percentageSwitch.click();
+  await expect(percentageSwitch).toHaveAttribute("aria-checked", "true");
+  const assertNoAmounts = async () => {
+    const content = await page
+      .locator("main")
+      .evaluate((main) =>
+        [
+          main.textContent,
+          ...Array.from(
+            main.querySelectorAll("[aria-label], [title]"),
+            (element) =>
+              `${element.getAttribute("aria-label")} ${element.getAttribute("title")}`,
+          ),
+        ].join(" "),
+      );
+    expect(content).not.toMatch(/CHF\s*-?[\d,]+(?:\.\d+)?/);
+    expect(content).not.toMatch(/NaN|Infinity/);
+  };
+  await expect(page.locator(".metric-value").first()).toHaveText("100%");
+  await page.locator(".analysis-chart [role=button]").first().focus();
+  await expect(page.locator(".analysis-chart-detail").first()).toContainText(
+    "%",
+  );
+  await assertNoAmounts();
+  await page.getByRole("button", { name: /1\. Plan test expense/ }).click();
+  await expect(page.locator(".analysis-merchant-detail")).toContainText("%");
+  await assertNoAmounts();
+  await page.goto(`/?month=${month}&currency=CHF`);
+  await expect(percentageSwitch).toHaveAttribute("aria-checked", "true");
+  await expect(
+    page.locator(".financial-metrics .metric-value").first(),
+  ).toHaveText("16%");
+  await assertNoAmounts();
+  for (const width of [320, 390, 768]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(percentageSwitch).toBeVisible();
+    await page.getByRole("button", { name: "Open navigation" }).click();
+    await expect(page.getByLabel("Currency", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Currency", { exact: true })).toHaveValue(
+      "CHF",
+    );
+    if (width === 320) {
+      await page.getByLabel("Currency", { exact: true }).selectOption("EUR");
+      await expect(page).toHaveURL(/currency=EUR/);
+      await page.getByLabel("Currency", { exact: true }).selectOption("CHF");
+      await expect(page).toHaveURL(/currency=CHF/);
+    }
+    await page.getByRole("button", { name: "Close menu" }).click();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+  }
+  await page.screenshot({
+    path: ".data/screenshots/planning-overview-percentages.png",
+    fullPage: true,
+  });
+  await percentageSwitch.click();
+  await expect(
+    page.locator(".financial-metrics .metric-value").first(),
+  ).toContainText("400.00");
+
   await page.goto(`/receipts?month=${month}&currency=CHF`);
   await expect(
     page.getByRole("heading", { name: "Receipt coverage" }),

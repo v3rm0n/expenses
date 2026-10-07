@@ -84,6 +84,7 @@ export default function ExpenseApp() {
     [currency, setCurrency] = useState("EUR"),
     [mobile, setMobile] = useState(false),
     [toast, setToast] = useState("");
+  const [showPercentages, setShowPercentages] = useState(false);
   const sidebar = useRef<HTMLElement>(null);
   useDialogFocus(sidebar, () => setMobile(false), mobile);
   useEffect(() => {
@@ -129,6 +130,9 @@ export default function ExpenseApp() {
     return () => window.removeEventListener("expenses:unauthorized", fn);
   }, [router]);
   useEffect(() => {
+    setShowPercentages(
+      window.localStorage.getItem("expenses_show_percentages") === "true",
+    );
     const saved = window.localStorage.getItem("expenses_currency");
     if (saved && /^[A-Z]{3}$/.test(saved)) setCurrency(saved);
     const period = Number(
@@ -220,6 +224,7 @@ export default function ExpenseApp() {
   }
   const context: AppContext = {
     state: state.data,
+    showPercentages,
     currency,
     month,
     revision,
@@ -293,6 +298,20 @@ export default function ExpenseApp() {
           ))}
         </nav>
         <div className="sidebar-bottom">
+          <label className="sidebar-currency">
+            <span>Currency</span>
+            <select
+              aria-label="Currency"
+              value={currency}
+              onChange={(event) => selectCurrency(event.target.value)}
+            >
+              {[...new Set([...state.data.currencies, currency])].map(
+                (code) => (
+                  <option key={code}>{code}</option>
+                ),
+              )}
+            </select>
+          </label>
           <div className="owner">
             <span className="owner-avatar">{initials(state.data.owner)}</span>
             <span>
@@ -336,15 +355,32 @@ export default function ExpenseApp() {
                     : title}
               </h1>
             </div>
-            {(path.length <= 1 || active === "advanced") &&
-              [
-                "overview",
-                "analysis",
-                "goals",
-                "transactions",
-                "advanced",
-              ].includes(active) && (
+            {path.length <= 1 &&
+              ["overview", "analysis", "goals", "transactions"].includes(
+                active,
+              ) && (
                 <div className="page-controls">
+                  {["overview", "analysis"].includes(active) && (
+                    <button
+                      className="button subtle amount-display-switch"
+                      role="switch"
+                      aria-checked={showPercentages}
+                      onClick={() => {
+                        const next = !showPercentages;
+                        setShowPercentages(next);
+                        window.localStorage.setItem(
+                          "expenses_show_percentages",
+                          String(next),
+                        );
+                      }}
+                    >
+                      <span
+                        className="amount-display-track"
+                        aria-hidden="true"
+                      />
+                      Show percentages
+                    </button>
+                  )}
                   {active === "analysis" && (
                     <select
                       aria-label="Period length"
@@ -371,45 +407,33 @@ export default function ExpenseApp() {
                       )}
                     </select>
                   )}
-                  <select
-                    aria-label="Currency"
-                    className="currency-select"
-                    value={currency}
-                    onChange={(e) => selectCurrency(e.target.value)}
-                  >
-                    {[...new Set([...state.data.currencies, currency])].map(
-                      (c) => (
-                        <option key={c}>{c}</option>
-                      ),
-                    )}
-                  </select>
-                  {active !== "advanced" &&
-                    search.get("history") !== "true" && (
-                      <div className="month-picker">
-                        <button
-                          aria-label="Previous month"
-                          onClick={() => shiftMonth(-1)}
-                        >
-                          <ChevronLeft size={16} />
-                        </button>
-                        <ISODateInput
-                          precision="month"
-                          aria-label={
-                            active === "analysis" ? "Period ending" : "Month"
-                          }
-                          value={month}
-                          onChange={(e) =>
-                            e.target.value && selectMonth(e.target.value)
-                          }
-                        />
-                        <button
-                          aria-label="Next month"
-                          onClick={() => shiftMonth(1)}
-                        >
-                          <ChevronRight size={16} />
-                        </button>
-                      </div>
-                    )}
+
+                  {search.get("history") !== "true" && (
+                    <div className="month-picker">
+                      <button
+                        aria-label="Previous month"
+                        onClick={() => shiftMonth(-1)}
+                      >
+                        <ChevronLeft size={16} />
+                      </button>
+                      <ISODateInput
+                        precision="month"
+                        aria-label={
+                          active === "analysis" ? "Period ending" : "Month"
+                        }
+                        value={month}
+                        onChange={(e) =>
+                          e.target.value && selectMonth(e.target.value)
+                        }
+                      />
+                      <button
+                        aria-label="Next month"
+                        onClick={() => shiftMonth(1)}
+                      >
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
           </div>
