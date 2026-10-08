@@ -62,7 +62,11 @@ Configuration lives in the ignored `.env.local`. Store the Enable Banking signin
 
 Copy `.env.example` to `.env.local` and generate the secrets described above. Use a random hexadecimal `POSTGRES_PASSWORD` so it is safe to embed in the database URL. Configure `APP_URL`, `ACCESS_URL`, and optional integration credentials for your installation.
 
-The container runs the web app and worker together, applies migrations, and connects to the separate PostgreSQL service. Start both services with:
+The container runs the web app and worker together, applies migrations, and connects to the separate PostgreSQL service.
+
+For an existing local installation, stop the local app first, retain its encryption key and database credentials, and copy its `.data` contents into the `expenses-data` volume before starting the container. Reusing the database alone does not copy the original receipt and email files.
+
+Start both services with:
 
 ```sh
 docker compose --env-file .env.local -f compose.yaml -f compose.container.yaml pull
