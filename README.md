@@ -13,6 +13,29 @@ A self-hosted, single-owner web app for tracking bank transactions and itemized 
 - Detailed spending, income, cash flow, merchant, and contribution history analysis.
 - CSV exports and encrypted backups of the database and original documents.
 
+## Screenshots
+
+These screenshots use an isolated demo account with entirely fictional transactions, amounts, merchants, goals, and receipt items. They contain no personal financial data.
+
+![Overview with a fictional monthly spending plan and contribution goals](docs/screenshots/overview.png)
+
+<details>
+<summary>Spending analysis, receipt details, and mobile view</summary>
+
+### Spending analysis
+
+![Six months of synthetic income, spending, and category breakdowns](docs/screenshots/spending-analysis.png)
+
+### Receipt details
+
+![An itemized fictional receipt linked to a demo payment](docs/screenshots/receipt-detail.png)
+
+### Mobile transactions
+
+<img src="docs/screenshots/mobile-transactions.png" alt="Mobile transaction list with fictional merchants and purchases" width="390" />
+
+</details>
+
 ## Running locally
 
 Requires Node.js 22.13 or newer, npm, and Docker (or Colima on macOS).
