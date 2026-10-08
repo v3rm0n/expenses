@@ -5,6 +5,7 @@ Setup, integrations, receipt handling, reporting, and maintenance for Personal e
 ## Contents
 
 - [Getting started](#getting-started)
+- [Running with Docker](#running-with-docker)
 - [Tailscale access](#tailscale-access)
 - [Reverse proxy and bank connection](#reverse-proxy-and-bank-connection)
 - [Investment and pension contributions](#investment-and-pension-contributions)
@@ -56,6 +57,33 @@ npm run setup
 Open the **setup link** it prints and choose your name and a password of at least 12 characters. The setup token is consumed logically by the creation of the single owner account; it cannot create a second owner. The app removes the token from the address bar. Sign in separately on your phone once the HTTPS proxy or Tailscale access is ready. There is no default password or demo data in your database.
 
 Configuration lives in the ignored `.env.local`. Store the Enable Banking signing key outside the repository, for example at `~/.config/expenses/enable-banking.pem`, with owner-only permissions. Secrets are never sent to the browser, except the inbound email token when you explicitly reveal it in Settings. `.env.example` documents the variables for another installation; generate independent random secrets and keep the encryption key stable.
+
+## Running with Docker
+
+Copy `.env.example` to `.env.local` and generate the secrets described above. Use a random hexadecimal `POSTGRES_PASSWORD` so it is safe to embed in the database URL. Configure `APP_URL`, `ACCESS_URL`, and optional integration credentials for your installation.
+
+The container runs the web app and worker together, applies migrations, and connects to the separate PostgreSQL service. Start both services with:
+
+```sh
+docker compose --env-file .env.local -f compose.yaml -f compose.container.yaml pull
+docker compose --env-file .env.local -f compose.yaml -f compose.container.yaml up -d
+docker compose --env-file .env.local -f compose.yaml -f compose.container.yaml exec app npm run setup
+```
+
+Open the printed setup link to create the owner account. The app listens on `127.0.0.1:4317` on the host; use an HTTPS reverse proxy for remote access. The Compose override supplies the internal database URL and stores original documents, OCR cache, and browser state in the `expenses-data` volume. PostgreSQL keeps the existing `expenses-db` volume. Keep both volumes when updating; `docker compose down -v` removes their data.
+
+To update, repeat the `pull` and `up -d` commands. Set `EXPENSES_IMAGE=ghcr.io/v3rm0n/expenses:sha-<full-commit-sha>` in `.env.local` to select a particular published commit instead of `latest`.
+
+Bank signing keys must be mounted separately, read-only, and `ENABLE_BANKING_PRIVATE_KEY_PATH` must point to their path inside the container. If the GHCR package is private, authenticate with `docker login ghcr.io` before pulling. The existing backup/restore scripts expect the local Docker CLI and database Compose service; run them on the host, with access to the documents in the `expenses-data` volume.
+
+Build and run a local image with:
+
+```sh
+docker build -t expenses:local .
+EXPENSES_IMAGE=expenses:local docker compose --env-file .env.local -f compose.yaml -f compose.container.yaml up -d
+```
+
+The [publishing workflow](.github/workflows/container.yml) runs on every push to `main` and can also be started manually from GitHub Actions. It uses the repository's `GITHUB_TOKEN` with package write permission; no registry password needs to be added to repository secrets. Build inputs exclude local environment files, signing keys, documents, backups, and Git history.
 
 ## Tailscale access
 
@@ -246,4 +274,4 @@ Tests exercise exact money, currencies, discounts, receipt reconciliation, repea
 - `integrations/cloudflare`: deployable inbound Email Worker and configuration.
 - `tests`: synthetic fixtures, unit checks, and browser workflows.
 
-The web app/worker run as local Node processes; Compose manages PostgreSQL. This adapts the original [implementation plan](PLAN.md) to your requested local hosting. Full application containers, PWA offline caching, additional retailer account synchronization, currency conversion and model-based suggestions are later extensions.
+The web app and worker can run as local Node processes or in the published container; Compose manages PostgreSQL. This adapts the original [implementation plan](PLAN.md) to local hosting. PWA offline caching, additional retailer account synchronization, currency conversion and model-based suggestions are later extensions.

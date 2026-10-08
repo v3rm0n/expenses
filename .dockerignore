@@ -1,0 +1,29 @@
+# Only application build/runtime inputs may enter the build context.
+**
+!Dockerfile
+!.dockerignore
+!package.json
+!package-lock.json
+!next.config.ts
+!tsconfig.json
+!LICENSE
+!src/
+!src/**
+!migrations/
+!migrations/**
+!scripts/
+!scripts/run.ts
+!scripts/worker.ts
+!scripts/docker.ts
+!scripts/setup.ts
+!scripts/migrate.ts
+
+# Exclude private files even when placed inside an allowed directory.
+**/.env*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.log
+**/*.enc
+**/*.dump

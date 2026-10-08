@@ -7,7 +7,9 @@ assertConfig();
 try {
   await pool.query("SELECT 1");
 } catch {
-  await docker(["compose", "--env-file", ".env.local", "up", "-d", "db"]);
+  // Containers connect to a separate database service instead of starting Docker.
+  if (!process.argv.includes("--container"))
+    await docker(["compose", "--env-file", ".env.local", "up", "-d", "db"]);
   for (let i = 0; i < 30; i++) {
     try {
       await pool.query("SELECT 1");

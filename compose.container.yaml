@@ -1,0 +1,21 @@
+services:
+  app:
+    image: ${EXPENSES_IMAGE:-ghcr.io/v3rm0n/expenses:latest}
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    env_file: .env.local
+    environment:
+      HOST: 0.0.0.0
+      PORT: 4317
+      DATA_DIR: /app/.data
+      DATABASE_URL: postgresql://expenses:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.local}@db:5432/expenses
+    ports:
+      - "127.0.0.1:${PORT:-4317}:4317"
+    volumes:
+      - expenses-data:/app/.data
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  expenses-data:

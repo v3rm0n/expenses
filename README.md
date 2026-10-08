@@ -35,6 +35,12 @@ In a second terminal, run `npm run setup` and open the printed setup link to cre
 
 The app defaults to `http://127.0.0.1:4317`. The local runner starts the web app, background worker, and PostgreSQL database. Use `npm run dev` for development.
 
+## Container image
+
+Every push to `main` builds and publishes `ghcr.io/v3rm0n/expenses:latest` and a `sha-<full-commit-sha>` tag for Linux AMD64 and ARM64. The image includes the web app, background worker, and Chromium for receipt imports. Configuration and private data are supplied at runtime.
+
+See [running with Docker](GUIDE.md#running-with-docker) for deployment and local builds.
+
 ## Project
 
 Built with Next.js, React, TypeScript, and PostgreSQL. The interface lives in `src/app` and `src/components`, backend services in `src/server`, and currency math, classification, and receipt parsers in `src/lib`.
