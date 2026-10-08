@@ -1,6 +1,6 @@
 # Personal expenses
 
-A private, single-owner web app for tracking bank transactions and itemized receipts. It runs on your own machine, with a responsive interface for phones and computers.
+A self-hosted, single-owner web app for tracking bank transactions and itemized receipts. It runs on your own machine, with a responsive interface for phones and computers.
 
 ## Features
 
@@ -17,7 +17,21 @@ A private, single-owner web app for tracking bank transactions and itemized rece
 
 Requires Node.js 22.13 or newer, npm, and Docker (or Colima on macOS).
 
-Install dependencies with `npm ci`, copy `.env.example` to `.env.local`, and configure the secrets described in the [setup guide](GUIDE.md#getting-started). Then run `npm run build` and `npm start`, and use `npm run setup` in a second terminal to create the owner account.
+Install dependencies and create your local configuration:
+
+```sh
+npm ci
+cp .env.example .env.local
+```
+
+Configure database credentials and generate independent random secrets as described in the [setup guide](GUIDE.md#getting-started). Then build and start the app:
+
+```sh
+npm run build
+npm start
+```
+
+In a second terminal, run `npm run setup` and open the printed setup link to create the owner account. Banking and retailer integrations are optional and require your own accounts and credentials.
 
 The app defaults to `http://127.0.0.1:4317`. The local runner starts the web app, background worker, and PostgreSQL database. Use `npm run dev` for development.
 
@@ -26,3 +40,21 @@ The app defaults to `http://127.0.0.1:4317`. The local runner starts the web app
 Built with Next.js, React, TypeScript, and PostgreSQL. The interface lives in `src/app` and `src/components`, backend services in `src/server`, and currency math, classification, and receipt parsers in `src/lib`.
 
 See the [application guide](GUIDE.md) for hosting, integrations, supported receipt formats, reporting behavior, backups, and development checks. The [Cloudflare email bridge](integrations/cloudflare/README.md) has its own deployment instructions, and [PLAN.md](PLAN.md) records the original implementation plan.
+
+## Development
+
+```sh
+npm test
+npm run typecheck
+npm run format:check
+```
+
+See the [guide’s checks section](GUIDE.md#checks) for database integration and browser tests.
+
+## Private data
+
+Keep credentials in `.env.local` and signing keys outside the repository. Local configuration, `.data/`, backups, and the Cloudflare deployment configuration are ignored by Git. Use synthetic or anonymized test fixtures; do not commit personal receipts, bank exports, or account identifiers.
+
+## License
+
+[MIT](LICENSE).

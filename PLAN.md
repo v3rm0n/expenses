@@ -4,7 +4,7 @@ This records the initial design and research from October 2, 2026. Status notes 
 
 Build a private web application for one owner, usable from a phone and computer. It will collect bank transactions through Enable Banking, import digital receipts from Rimi, Partnerkaart, Coop, and Lidl, classify spending, and show where the money went.
 
-Confirmed choices: private web app; existing Enable Banking production access; receipts currently arrive through a mix of apps, websites, and email. The supplied signing key was validated locally and authenticated a read-only application metadata request successfully. The application is active in production with account-information access (`AIS`) and the registered callback `https://expenses.example.com/callback`. Start with EUR and Europe/Tallinn as configurable defaults. The workspace is empty, so there is no existing application to preserve. The initial local implementation is now in this repository; see README.md for operating instructions and pending real-account validation.
+Design defaults: a private web app with bank account-information access (`AIS`) through Enable Banking, and receipts imported from apps, websites, and email. Each installation supplies its own credentials and registers its callback, such as `https://expenses.example.com/callback`. Start with EUR and Europe/Tallinn as configurable defaults.
 
 The central rule is that each purchase contributes to spending once. A bank payment establishes an expense; its receipt supplies the products and category breakdown. For example, a €45 supermarket payment might become €30 groceries, €10 household supplies, and €5 alcohol. Importing the receipt must keep the expense total at €45.
 
@@ -18,17 +18,17 @@ flowchart LR
     C --> O[Overview and review queue]
 ```
 
-Use the verified setup below and collect the remaining inputs before implementing live connections. Build the interface, database, and import workflows with fixtures while obtaining representative exports.
+Use the configuration checklist below and collect the remaining inputs before implementing live connections. Build the interface, database, and import workflows with fixtures while obtaining representative exports.
 
-| Input                         | Status and handling                                                                                                                                                                              |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Enable Banking application ID | Verified locally; configure through `ENABLE_BANKING_APP_ID`.                                                                                                                                     |
-| Private RSA signing key       | Received as an attachment and validated. The file remains outside the repository with owner-only permissions. Deploy it as a server secret referenced through `ENABLE_BANKING_PRIVATE_KEY_PATH`. |
-| Enable Banking environment    | Active production application with `AIS` verified. Use a separate sandbox application for simulated integration checks if available.                                                             |
-| Banks and account types       | LHV, SEB, and Revolut; live Estonia catalogue coverage confirmed. Preserve Revolut currencies separately. Available account history requires owner consent.                                      |
-| Hosting and callback URL      | Local web app and worker on this machine, web port 4317. User handles the HTTPS reverse proxy; callback stays `https://expenses.example.com/callback`.                                              |
-| Receipt examples              | Obtain representative exports from each retailer, including discounts, weighted products, and a refund or mixed payment where available. These determine parser requirements.                    |
-| Email provider                | Free Cloudflare Email Routing + Worker/KV bridge provided, pending deployment/address configuration.                                                                                             |
+| Input                         | Status and handling                                                                                                                                                           |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Enable Banking application ID | Configure your application through `ENABLE_BANKING_APP_ID`.                                                                                                                   |
+| Private RSA signing key       | Store outside the repository with owner-only permissions. Reference it through `ENABLE_BANKING_PRIVATE_KEY_PATH`.                                                             |
+| Enable Banking environment    | Configure an application with `AIS` access. Use a separate sandbox application for simulated integration checks if available.                                                 |
+| Banks and account types       | Check provider coverage for the intended banks and account types. Preserve wallet currencies separately. Available account history requires owner consent.                    |
+| Hosting and callback URL      | Local web app and worker on port 4317, behind an HTTPS reverse proxy; register a callback such as `https://expenses.example.com/callback`.                                    |
+| Receipt examples              | Obtain representative exports from each retailer, including discounts, weighted products, and a refund or mixed payment where available. These determine parser requirements. |
+| Email provider                | Free Cloudflare Email Routing + Worker/KV bridge provided, pending deployment/address configuration.                                                                          |
 
 Enable Banking authenticates applications using an application ID and RSA-signed JWTs. Bank consent is separate from application authentication. Personal production use with linked accounts is supported; under the current personal-use terms, API use is free, with possible limits on linked accounts. Verify that all intended accounts are linked. [Authentication documentation](https://enablebanking.com/docs/api/reference/), [personal account activation](https://enablebanking.com/docs/api/linked-accounts), [current terms](https://enablebanking.com/terms/).
 
