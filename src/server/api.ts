@@ -19,6 +19,7 @@ import { transactionReviewQueue } from "./transaction-review";
 import { importAmazonPack, MAX_AMAZON_PACK_SIZE } from "./amazon";
 import {
   similarTransactions,
+  saveSimilarCategoryRule,
   type SimilarTransaction,
 } from "./similar-transactions";
 import { query, transaction, migrate } from "./db";
@@ -797,6 +798,13 @@ export async function handleApi(
               ],
             );
           }
+          if (input.similarPattern !== undefined)
+            await saveSimilarCategoryRule(
+              entry,
+              input.similarPattern,
+              input.allocations[0].category_id,
+              db,
+            );
           return matches.length + 1;
         });
         return json({ ok: true, count });

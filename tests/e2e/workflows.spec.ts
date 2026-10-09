@@ -711,6 +711,25 @@ test("bulk categorization spans history, keeps each amount and preserves manual 
     { category_id: "gifts", amount: 450 },
   ]);
   expect((await detail(linked)).allocations).toEqual(before[3].allocations);
+  const future = await create("9.25", "2026-11-01", true);
+  expect((await detail(future)).allocations).toMatchObject([
+    { category_id: "gifts", amount: 925, source: "rule" },
+  ]);
+  expect((await detail(future)).manual).toBe(false);
+  const futureForeign = await create("9.25", "2026-11-01", true, "USD");
+  const futureRefund = await create(
+    "9.25",
+    "2026-11-01",
+    true,
+    "EUR",
+    "refund",
+  );
+  expect((await detail(futureForeign)).allocations[0].category_id).toBe(
+    "uncategorized",
+  );
+  expect((await detail(futureRefund)).allocations).not.toEqual(
+    expect.arrayContaining([expect.objectContaining({ category_id: "gifts" })]),
+  );
 });
 
 test("receipt-not-required toggle persists, adjusts coverage and preserves classification", async ({

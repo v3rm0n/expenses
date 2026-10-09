@@ -1037,9 +1037,10 @@ export function TransactionDetailView({
                     </label>
                     <p className="form-help">
                       Same merchant ({data.merchant}), payment type and
-                      currency, across all history. Receipt-linked payments are
-                      skipped. Manual corrections are kept unless included
-                      below. Each payment keeps its own amount and note.
+                      currency, across all history and future imports.
+                      Receipt-linked payments are skipped. Manual corrections
+                      are kept unless included below. Each payment keeps its own
+                      amount and note.
                     </p>
                     <label className="checkbox">
                       <input
@@ -1058,6 +1059,10 @@ export function TransactionDetailView({
                           <p>
                             {similar.data.count} other matching transactions
                             will be categorized on save.
+                          </p>
+                          <p className="form-help">
+                            Future matching transactions will use this category
+                            automatically.
                           </p>
                           {similar.data.examples.map((entry) => (
                             <p className="form-help" key={entry.id}>

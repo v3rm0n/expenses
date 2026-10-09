@@ -20,11 +20,11 @@ describe("Amazon invoices", () => {
       description: "Huggies diapers",
       quantity: "1",
       amount: 510,
-      categoryId: "household",
+      categoryId: "children",
     });
     expect(parseReceipt(receiptText()).retailer).toBe("rimi");
   });
-  it("reads German PDFs and distributes delivery and discounts without counting VAT", () => {
+  it("keeps shipping and its discount separate from the product discount", () => {
     const text = `Rechnung
 Amazon EU S.à r.l.
 Rechnungsdatum
@@ -46,8 +46,15 @@ Gesamtpreis 30,15 €`;
       total: 3015,
       purchasedAt: "2026-10-01",
     });
-    expect(receipt.items.map((i) => i.amount)).toEqual([3350, 1482, -1817]);
-    expect(receipt.items.every((i) => i.categoryId === "household")).toBe(true);
+    expect(receipt.items.map((i) => i.amount)).toEqual([
+      3350, 1482, -1482, -335,
+    ]);
+    expect(receipt.items.map((i) => i.categoryId)).toEqual([
+      "children",
+      "shipping",
+      "shipping",
+      "children",
+    ]);
   });
   it("converts a positive credit note into a refund", () => {
     const text = amazonReceiptText()

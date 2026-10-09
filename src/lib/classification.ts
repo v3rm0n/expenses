@@ -72,25 +72,42 @@ export function merchantCategory(
 export function productCategory(description: string): string {
   const text = normalize(description);
   if (
-    /pant|taara|deposit|pfand|metallist ühekorrapakend|\b(?:metall|plast|klaas)pakend\s+[a-d]\b/.test(
+    /\bpant\b|taara|deposit|pfand|metallist ühekorrapakend|\b(?:metall|plast|klaas)pakend\s+[a-d]\b/.test(
       text,
     )
   )
     return "deposits";
   if (
-    /õlu|olu\b|beer|vein|wine|viin|vodka|siider|cider|gin\b|whisky|whiskey|tubak|sigaret/.test(
+    /huggies|pampers|napp(?:y|ies)|diaper|treppenschutzgitter|windel|mähk|põnn|mahe raudne|laste hambahari|hambahari lastele|hambapasta lastele|oral-b kids|beebisalvr|babycool/.test(
+      text,
+    )
+  )
+    return "children";
+  if (/alkoholivaba|alk\.\s*vaba|non[ -]alcoholic|alcohol[ -]free/.test(text))
+    return "groceries";
+  if (/toidulisand|joogitabletid/.test(text)) return "health";
+  if (
+    /deodorant|dušigeel|dushigeel|šampoon|shampoo|vedelseep|\bseep\b|hambahari|hambavahepuhasti|hambapasta|h\/pasta|hügieenisid|hilgieenisid|libresse|tampoon|kondoom/.test(
+      text,
+    )
+  )
+    return "personal_care";
+  if (/töökindad|san\.\s*silikoon/.test(text)) return "home_improvement";
+  if (/lillekimp/.test(text)) return "gifts";
+  if (
+    /õlu|olu\b|beer|vein|wine|viin|vodka|soju|sun city|siider|cider|gin\b|whisky|whiskey|tubak|sigaret/.test(
       text,
     )
   )
     return "alcohol";
   if (
-    /pesuvah|pesupulb|nõudepes|puhast|detergent|cleaner|tualettpaber|majapidam|prügikott|ostukott|poekott|kilekott|šampoon|shampoo|seep|hambahari|hambavahepuhasti|hügieeniside|hilgieeniside|libresse|tampoon|patarei|paterei|energizer/.test(
+    /pesuvah|pesupulb|nõudepes|puhast|detergent|cleaner|tualettpaber|majapidam|prügikott|ostukott|poekott|kilekott|kotitasu|paberkäter|maj\/paber|t\/paber|pesugeel|aquaphor pudel|patarei|paterei|energizer/.test(
       text,
     )
   )
     return "household";
   if (
-    /piim|milk|leib|sai\b|bread|juust|cheese|jogurt|yogurt|keefir|kohupiim|või\b|butter|muna|egg|kana|chicken|liha|meat|veis|pork|sealiha|kala|fish|lõhe|salmon|vorst|sink|ham\b|õun|apple|avokaado|banaan|banana|ananas|pineapple|coca[ -]?cola|limonaad|karastusjook|tomat|tomato|kartul|kart\.?\s*krõp|potato|porgand|carrot|kurk|cucumber|sibul|onion|küüslauk|garlic|lasanje|kaste|salat|salad|marj|maasik|mustik|puuvil|juurvil|pasta|makaron|riis|rice|jahu|flour|suhkur|sugar|sool|salt|kohv|coffee|tee\b|tea\b|mahl|juice|vesi|water|šokolaad|chocolate|küpsis|biscuit|pähkel|nuts|jäätis|jaatis|jääkuub|jaakuub|jäakuub|ice cream|helbed|cereal|tatra|kaera|puder|aedvi|õli|oil\b|ketšup|ketchup|toit|söök/.test(
+    /piim|milk|leib|sai\b|bread|juust|cheese|jogurt|yogurt|keefir|kohupiim|või\b|butter|muna|egg|kana|chicken|liha|meat|veis|pork|sealiha|kala|fish|lõhe|salmon|vorst|sink|ham\b|õun|apple|avokaado|banaan|banana|ananas|pineapple|coca[ -]?cola|limonaad|karastusjook|tomat|tomato|kartul|kart\.?\s*krõp|potato|porgand|carrot|kurk|cucumber|sibul|onion|küüslauk|garlic|lasanje|kaste|salat|salad|spinat|marj|maasik|mustik|puuvil|juurvil|pasta|makaron|riis|rice|jahu|flour|suhkur|sugar|sool|salt|kohv|coffee|tee\b|tea\b|mahl|juice|vesi|water|šokolaad|chocolate|küpsis|biscuit|pähkel|nuts|jäätis|jaatis|jääkuub|jaakuub|jäakuub|ice cream|helbed|cereal|tatra|kaera|puder|aedvi|õli|oil\b|ketšup|ketchup|toit|söök/.test(
       text,
     )
   )

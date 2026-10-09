@@ -90,6 +90,17 @@ export async function migrate() {
           ),
         );
       }
+      if (
+        !(await db.query("SELECT 1 FROM schema_migrations WHERE version=5"))
+          .rowCount
+      ) {
+        await db.query(
+          await readFile(
+            path.resolve("migrations/005-similar-category-rules.sql"),
+            "utf8",
+          ),
+        );
+      }
     }).catch((error) => {
       globalDb.expenseMigration = undefined;
       throw error;

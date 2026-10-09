@@ -10,7 +10,10 @@ import { normalize, matchingRule } from "../lib/classification";
 import type { Retailer, Rule } from "../lib/types";
 import { enqueue } from "./queue";
 import { applyAllocations, autoMatchReceipt } from "./ledger";
-import type { ReceiptOrderContext } from "../lib/wolt-receipt";
+import {
+  recategorizeWoltDiscounts,
+  type ReceiptOrderContext,
+} from "../lib/wolt-receipt";
 
 export const MAX_FILE_SIZE = 15 * 1024 * 1024;
 export function detectFile(buffer: Buffer, filename: string) {
@@ -311,9 +314,20 @@ export async function processReceipt(id: string) {
             previousDescription(old.description) ===
               normalize(item.description),
         );
-        const mapping = mappings.find(
-          (mapping) => mapping.product === normalize(item.description),
-        );
+        const mapping =
+          mappings.find(
+            (mapping) => mapping.product === normalize(item.description),
+          ) ||
+          mappings.find(
+            (mapping) =>
+              mapping.product ===
+              normalize(
+                item.description.replace(
+                  /^(?:Soodustus|Allahindlus|Aktionsrabatt)\s*·\s*/i,
+                  "",
+                ),
+              ),
+          );
         const rule = matchingRule(
           rules.filter((rule) => rule.field === "product"),
           parsed.merchant,
@@ -327,6 +341,8 @@ export async function processReceipt(id: string) {
           item.categoryId;
         item.manual = Boolean(previous?.manual || mapping);
       }
+      if (parsed.retailer === "wolt")
+        parsed.items = recategorizeWoltDiscounts(parsed.items);
       await db.query(
         `UPDATE receipts SET retailer=$2,merchant=$3,receipt_number=$4,purchased_at=$5,currency=$6,total=$7,
         card_amount=$8,cash_amount=$9,text=$10,issues=$11,status=$12,receipt_identity=$13,order_id=coalesce(order_id,$14),error=NULL,updated_at=now() WHERE id=$1`,

@@ -66,6 +66,141 @@ const check = (message: string, fn: () => Promise<void>) =>
 try {
   await migrate();
   await check(
+    "saved similar categories apply to future bank imports with the same matching criteria",
+    async () => {
+      const { saveSimilarCategoryRule } =
+        await import("../src/server/similar-transactions");
+      const [account] = await query(
+        "INSERT INTO accounts(identification_hash,name,currency,source) VALUES('similar-future-test','Future category test','EUR','bank') RETURNING id",
+      );
+      const merchant = "Future matching merchant";
+      const entry = { merchant, kind: "expense", currency: "EUR" };
+      const record = (
+        id: string,
+        description = "Package fee - November",
+        name = merchant,
+        currency = "EUR",
+        direction: "DBIT" | "CRDT" = "DBIT",
+        status = "BOOK",
+      ): BankTransaction => ({
+        entry_reference: id,
+        transaction_amount: { amount: "4.50", currency },
+        credit_debit_indicator: direction,
+        booking_date: "2026-11-01",
+        status,
+        creditor: { name },
+        remittance_information: [description],
+      });
+      const allocation = async (id: string) =>
+        (
+          await query(
+            "SELECT a.*,t.manual FROM allocations a JOIN transactions t ON t.id=a.transaction_id WHERE t.account_id=$1 AND t.source_reference=$2",
+            [account.id, id],
+          )
+        )[0];
+      try {
+        await transaction((db) =>
+          saveSimilarCategoryRule(entry, "Package fee", "fees_taxes", db),
+        );
+        await importBankTransactions(account.id, [
+          record(
+            "match",
+            "Package fee - November",
+            " FUTURE matching merchant ",
+          ),
+          record(
+            "pending",
+            "Package fee - December",
+            merchant,
+            "EUR",
+            "DBIT",
+            "PDNG",
+          ),
+          record("other-description", "Unrelated purchase"),
+          record("other-merchant", undefined, `${merchant} extra`),
+          record("other-currency", undefined, merchant, "USD"),
+          record("refund", "Package fee refund", merchant, "EUR", "CRDT"),
+        ]);
+        for (const id of ["match", "pending"]) {
+          const row = await allocation(id);
+          assert.equal(row.category_id, "fees_taxes");
+          assert.equal(row.source, "rule");
+          assert.equal(row.amount, 450);
+          assert.equal(row.manual, false);
+        }
+        for (const id of [
+          "other-description",
+          "other-merchant",
+          "other-currency",
+          "refund",
+        ])
+          assert.equal((await allocation(id)).category_id, "uncategorized");
+
+        // Repeating the action updates the saved category rather than creating duplicates.
+        await transaction((db) =>
+          saveSimilarCategoryRule(entry, "package FEE", "subscriptions", db),
+        );
+        const [saved] = await query(
+          "SELECT count(*) AS count FROM similar_category_rules WHERE merchant=$1",
+          [merchant.toLowerCase()],
+        );
+        assert.equal(saved.count, 1);
+        await importBankTransactions(account.id, [record("next-month")]);
+        assert.equal(
+          (await allocation("next-month")).category_id,
+          "subscriptions",
+        );
+
+        await query(
+          "UPDATE transactions SET manual=true WHERE account_id=$1 AND source_reference='match'",
+          [account.id],
+        );
+        await importBankTransactions(account.id, [record("match")]);
+        assert.equal((await allocation("match")).category_id, "fees_taxes");
+
+        const [receipt] = await query(
+          "INSERT INTO receipts(file_hash,filename,content_type,storage_path,merchant,total,currency,status) VALUES('similar-future-receipt','future.txt','text/plain','future.txt',$1,450,'EUR','ready') RETURNING id",
+          [merchant],
+        );
+        const [payment] = await query(
+          "SELECT id FROM transactions WHERE account_id=$1 AND source_reference='next-month'",
+          [account.id],
+        );
+        try {
+          await query(
+            "INSERT INTO receipt_items(receipt_id,position,description,amount,category_id) VALUES($1,1,'Food',450,'groceries')",
+            [receipt.id],
+          );
+          await transaction((db) =>
+            linkReceipt(receipt.id, payment.id, 450, false, db),
+          );
+          assert.equal(
+            (await allocation("next-month")).category_id,
+            "groceries",
+          );
+        } finally {
+          await query("DELETE FROM receipts WHERE id=$1", [receipt.id]);
+        }
+
+        await transaction((db) =>
+          saveSimilarCategoryRule(entry, "", "gifts", db),
+        );
+        await importBankTransactions(account.id, [
+          record("merchant-only", "A new purchase"),
+        ]);
+        assert.equal((await allocation("merchant-only")).category_id, "gifts");
+      } finally {
+        await query("DELETE FROM transactions WHERE account_id=$1", [
+          account.id,
+        ]);
+        await query("DELETE FROM accounts WHERE id=$1", [account.id]);
+        await query("DELETE FROM similar_category_rules WHERE merchant=$1", [
+          merchant.toLowerCase(),
+        ]);
+      }
+    },
+  );
+  await check(
     "spending plans persist per currency and month and reserve external pending payments once",
     async () => {
       const { saveSpendingPlan, loadSpendingPlan, financialOverview } =

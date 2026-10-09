@@ -90,6 +90,8 @@ export const CATEGORY_SEEDS = [
   ["alcohol", "Alcohol & tobacco", "#c67b62"],
   ["gifts", "Gifts", "#c595aa"],
   ["deposits", "Bottle deposits", "#8bb1a1"],
+  ["fees_taxes", "Fees & taxes", "#9a9388"],
+  ["shipping", "Postage & delivery", "#91a0aa"],
   ["investments", "Investment transfers", "#6388a1"],
   ["pension", "Pension contributions", "#7b89aa"],
   ["other", "Other spending", "#a1998a"],

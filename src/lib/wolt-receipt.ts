@@ -1,5 +1,5 @@
 import { parseMoney, prorate, validDate } from "./money";
-import { productCategory } from "./classification";
+import { normalize, productCategory } from "./classification";
 import type { ParsedReceipt, ReceiptItem, Retailer } from "./types";
 
 export type ReceiptOrderContext = {
@@ -11,6 +11,72 @@ export type ReceiptOrderContext = {
 };
 const clean = (text: string) =>
   text.replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
+
+export function woltChargeCategory(description: string): string | null {
+  const text = normalize(description);
+  if (/^(?:wolt\+? )?service fee(?: discount)?$/.test(text))
+    return "fees_taxes";
+  if (/^(?:delivery(?: fee| charge| discount)?|tip for courier)$/.test(text))
+    return "shipping";
+  return null;
+}
+
+// Saved product mappings are applied after parsing. Rebuild the derived voucher
+// rows afterwards so discounts reduce the final categories, excluding deposits.
+export function recategorizeWoltDiscounts(items: ReceiptItem[]): ReceiptItem[] {
+  let previousCategory: string | undefined;
+  items = items.map((item) => {
+    if (item.amount > 0) previousCategory = item.categoryId;
+    if (
+      /^Discount$/i.test(item.description) &&
+      item.amount < 0 &&
+      previousCategory
+    )
+      return { ...item, categoryId: previousCategory };
+    return item;
+  });
+  const discounts = items.filter((item) =>
+    /^Wolt payment discount · /.test(item.description),
+  );
+  if (!discounts.length) return items;
+  const base = items.filter((item) => !discounts.includes(item));
+  const categories = new Map<string, number>();
+  for (const item of base)
+    if (item.categoryId !== "deposits")
+      categories.set(
+        item.categoryId,
+        (categories.get(item.categoryId) || 0) + item.amount,
+      );
+  const eligible = [...categories].filter(([, amount]) => amount > 0);
+  const amount = discounts.reduce((sum, item) => sum + item.amount, 0);
+  if (
+    !eligible.length ||
+    amount >= 0 ||
+    -amount > eligible.reduce((sum, [, value]) => sum + value, 0)
+  )
+    return items;
+  const shares = prorate(
+    eligible.map(([, value]) => value),
+    amount,
+  );
+  return [
+    ...base,
+    ...eligible.flatMap(([categoryId], index) =>
+      shares[index]
+        ? [
+            {
+              description: `Wolt payment discount · ${categoryId}`,
+              quantity: null,
+              unit: null,
+              amount: shares[index],
+              categoryId,
+              manual: discounts.some((item) => item.manual),
+            },
+          ]
+        : [],
+    ),
+  ];
+}
 export function woltEmailOrder(text: string): ReceiptOrderContext | null {
   text = clean(text);
   if (!/\bwolt\b/i.test(text)) return null;
@@ -50,7 +116,22 @@ export function parseWoltReceipt(text: string): ParsedReceipt | null {
     }
   };
   const venue = text.match(/^Venue\s+(.+)$/im)?.[1];
-  const groceries = /wolt market|rimi|selver|coop|lidl/i.test(venue || "");
+  const groceries = /wolt market|rimi|selver|coop|lidl|stockmann/i.test(
+    venue || "",
+  );
+  const category = (description: string) => {
+    const product = productCategory(description);
+    if (groceries) return product === "uncategorized" ? "groceries" : product;
+    if (product === "deposits" || product === "gifts") return product;
+    // Wine sauces and cakes belong to the meal, while separately ordered
+    // alcoholic drinks are identified by their volume or alcohol strength.
+    if (
+      product === "alcohol" &&
+      /\d\s*(?:ml|cl|l)\b|\d[.,]\d+\s*%|\bsoju\b/i.test(description)
+    )
+      return product;
+    return "restaurants";
+  };
   const orderId = text
     .match(/^Order ID\s+([a-f\d]{24})\s*$/im)?.[1]
     .toLowerCase();
@@ -102,13 +183,8 @@ export function parseWoltReceipt(text: string): ParsedReceipt | null {
       unit: row[4]?.toLowerCase() || null,
       amount,
       categoryId:
-        discount && previous
-          ? previous.categoryId
-          : groceries
-            ? productCategory(description) === "uncategorized"
-              ? "groceries"
-              : productCategory(description)
-            : "restaurants",
+        woltChargeCategory(description) ||
+        (discount && previous ? previous.categoryId : category(description)),
       manual: false,
     });
   }
@@ -117,6 +193,15 @@ export function parseWoltReceipt(text: string): ParsedReceipt | null {
   for (const item of items) {
     const repeated = item.description.match(/^(.{20,}?)\s+\1$/u);
     if (repeated) item.description = repeated[1];
+  }
+  let previousCategory: string | undefined;
+  for (const item of items) {
+    item.categoryId =
+      woltChargeCategory(item.description) ||
+      (/discount/i.test(item.description) && item.amount < 0 && previousCategory
+        ? previousCategory
+        : category(item.description));
+    if (item.amount > 0) previousCategory = item.categoryId;
   }
   let total = money(totalLine?.[2]);
   const paymentLines = lines.slice(

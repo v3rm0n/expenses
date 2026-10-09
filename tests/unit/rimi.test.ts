@@ -148,12 +148,12 @@ KAARDIMAKSE 3,90 EUR
       137, 278, 8, 359, 10, 270,
     ]);
     expect(parsed.items.map((item) => item.categoryId)).toEqual([
-      "household",
+      "children",
       "groceries",
       "groceries",
       "alcohol",
       "deposits",
-      "household",
+      "personal_care",
     ]);
     expect(parsed.items[0].description).toBe(
       "Hambahari lastele Jordan extra soft",

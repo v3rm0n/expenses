@@ -64,8 +64,13 @@ export function parseAmazonReceipt(
   );
   let inTable = false;
   let pending: string[] = [];
+  let previousProduct: ReceiptItem | undefined;
   for (const raw of text.split("\n")) {
     const line = raw.trim().replace(/\s+/g, " ");
+    if (/^ASIN\s*:/i.test(line)) {
+      previousProduct = undefined;
+      continue;
+    }
     if (
       /^(?:Beschreibung|Description)\b/i.test(line) &&
       /Menge|Quantity/i.test(line)
@@ -97,7 +102,8 @@ export function parseAmazonReceipt(
       ),
     ];
     if (!amounts.length) {
-      pending.push(line);
+      if (previousProduct) previousProduct.description += ` ${line}`;
+      else pending.push(line);
       continue;
     }
     const prefix = line.slice(0, amounts[0].index).trim();
@@ -111,40 +117,58 @@ export function parseAmazonReceipt(
       continue;
     }
     const amount = money(amounts.at(-1)![1]);
-    items.push({
+    const item: ReceiptItem = {
       description,
       quantity: quantity?.[2] || null,
       unit: quantity ? "pcs" : null,
       amount,
-      categoryId: /windel|diaper|huggies|pampers/i.test(description)
-        ? "household"
+      categoryId: /^(?:Versandkosten|Shipping|Delivery|Postage)\b/i.test(
+        description,
+      )
+        ? "shipping"
         : productCategory(description),
       manual: false,
-    });
+    };
+    items.push(item);
+    previousProduct =
+      amount > 0 && item.categoryId !== "shipping" ? item : undefined;
   }
   if (total !== null && payable && money(payable[1]) !== total)
     issues.push("The Amazon invoice total and payable amount disagree.");
-  // Distribute delivery and basket discounts across the actual products.
+  // Keep shipping separate. A discount which covers shipping cancels that
+  // charge first; any remaining basket discount reduces the purchased products.
   const products = items.filter(
     (item) =>
       item.amount > 0 &&
       !/^(?:Versandkosten|Shipping|Delivery|Postage)\b/i.test(item.description),
   );
-  const extras = items.filter(
-    (item) =>
-      item.amount < 0 ||
-      /^(?:Versandkosten|Shipping|Delivery|Postage)\b/i.test(item.description),
-  );
+  let shipping = items
+    .filter((item) => item.categoryId === "shipping")
+    .reduce((sum, item) => sum + item.amount, 0);
+  const extras = items.filter((item) => item.amount < 0);
   if (products.length)
     for (const extra of extras) {
+      const shippingDiscount =
+        shipping > 0 && -extra.amount >= shipping ? shipping : 0;
+      shipping -= shippingDiscount;
       const shares = prorate(
         products.map((item) => item.amount),
-        extra.amount,
+        extra.amount + shippingDiscount,
       );
       const index = items.indexOf(extra);
       items.splice(
         index,
         1,
+        ...(shippingDiscount
+          ? [
+              {
+                ...extra,
+                description: `${extra.description} · Versandkosten`,
+                amount: -shippingDiscount,
+                categoryId: "shipping",
+              },
+            ]
+          : []),
         ...products.flatMap((product, i) =>
           shares[i]
             ? [

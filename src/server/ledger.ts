@@ -10,6 +10,7 @@ import {
 import { prorate } from "../lib/money";
 import type { Allocation, Rule } from "../lib/types";
 import { AppError } from "./errors";
+import { similarCategory } from "./similar-transactions";
 
 export async function applyAllocations(
   id: string,
@@ -80,7 +81,19 @@ export async function applyAllocations(
       },
     ];
   } else if (amount) {
-    if (rule && !ruleKind)
+    const savedCategory = await similarCategory(
+      {
+        id,
+        merchant: entry.merchant,
+        description: entry.description,
+        currency: entry.currency,
+        kind,
+      },
+      db,
+    );
+    if (savedCategory)
+      allocations = [{ categoryId: savedCategory, amount, source: "rule" }];
+    else if (rule && !ruleKind)
       allocations = [{ categoryId: rule.category_id, amount, source: "rule" }];
     else {
       const links = await query(

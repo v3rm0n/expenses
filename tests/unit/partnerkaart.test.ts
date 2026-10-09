@@ -23,9 +23,9 @@ describe("Partnerkaart / Selver CSV", () => {
     expect(receipt.items.map((item) => item.categoryId)).toEqual([
       "household",
       "groceries",
-      "groceries",
-      "groceries",
-      "household",
+      "children",
+      "children",
+      "personal_care",
     ]);
     expect(receipt.items[1]).toMatchObject({ quantity: "0.228", unit: null });
     expect(receipt.items[2].description).toBe(receipt.items[3].description);

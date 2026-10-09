@@ -137,6 +137,39 @@ Total in EUR (incl. VAT) 7.20`,
       orderId: woltOrderId,
     });
     expect(receipt.items.map((item) => item.amount)).toEqual([0, 50, 100, -10]);
+    expect(receipt.items.map((item) => item.categoryId)).toEqual([
+      "shipping",
+      "shipping",
+      "fees_taxes",
+      "fees_taxes",
+    ]);
+  });
+  it("keeps fee discounts with the fee even when preceded by a delivery tip", () => {
+    const text = woltReceiptText(true).replace(
+      "Service fee 0.90\nService fee 24% 1 1.00 1.00\nWolt+ service fee discount 24% 1 -0.10 -0.10",
+      "Wolt+ service fee discount 24% 1 -0.10 -0.10\nService fee 24% 1 1.00 1.00",
+    );
+    const receipt = parseReceipt(text);
+    expect(receipt.valid).toBe(true);
+    expect(receipt.items.map((item) => item.categoryId)).toEqual([
+      "shipping",
+      "shipping",
+      "fees_taxes",
+      "fees_taxes",
+    ]);
+  });
+  it("inherits the delivery category for a generic delivery discount", () => {
+    const receipt = parseReceipt(
+      woltReceiptText(true).replace(
+        "Delivery 24% 1 0.00 0.00",
+        "Delivery 24% 1 1.00 1.00\nDiscount 24% 1 -1.00 -1.00",
+      ),
+    );
+    expect(receipt.valid).toBe(true);
+    expect(receipt.items[1]).toMatchObject({
+      amount: -100,
+      categoryId: "shipping",
+    });
   });
   it("reads the email order total despite bidirectional formatting characters", () => {
     expect(
