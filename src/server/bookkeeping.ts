@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { query, transaction, type DB } from "./db";
 import { AppError } from "./errors";
+import { journalVisible } from "./account-visibility";
 import { digest } from "./crypto";
 import { parseMoney, validDate } from "../lib/money";
 import type {
@@ -29,7 +30,7 @@ function dates(from?: string, to?: string) {
 export async function journalDetail(id: string, db?: DB) {
   const read = async (connection: DB) => {
     const [journal] = await query<Journal>(
-      `SELECT ${journalColumns} FROM journal_entries j WHERE j.id=$1`,
+      `SELECT ${journalColumns} FROM journal_entries j WHERE j.id=$1 AND ${journalVisible}`,
       [id],
       connection,
     );
@@ -68,7 +69,7 @@ export async function journalPage(input: {
     input.origin || "all",
     input.search?.trim() || "",
   ];
-  const where = `j.currency=$1 AND ($2::date IS NULL OR j.booked_at>=$2) AND ($3::date IS NULL OR j.booked_at<=$3)
+  const where = `${journalVisible} AND j.currency=$1 AND ($2::date IS NULL OR j.booked_at>=$2) AND ($3::date IS NULL OR j.booked_at<=$3)
     AND ($4='all' OR ${origin}=$4)
     AND ($5='' OR j.description ILIKE '%'||$5||'%' OR j.reference ILIKE '%'||$5||'%' OR j.notes ILIKE '%'||$5||'%')`;
   return transaction(async (db) => {
@@ -322,7 +323,7 @@ export async function generalLedger(
        coalesce(sum(p.debit) FILTER(WHERE ($2::date IS NULL OR j.booked_at>=$2) AND ($3::date IS NULL OR j.booked_at<=$3)),0)::bigint AS debit,
        coalesce(sum(p.credit) FILTER(WHERE ($2::date IS NULL OR j.booked_at>=$2) AND ($3::date IS NULL OR j.booked_at<=$3)),0)::bigint AS credit,
        count(*) FILTER(WHERE ($2::date IS NULL OR j.booked_at>=$2) AND ($3::date IS NULL OR j.booked_at<=$3))::int AS count
-       FROM journal_postings p JOIN journal_entries j ON j.id=p.entry_id WHERE p.account_id=$1`,
+       FROM journal_postings p JOIN journal_entries j ON j.id=p.entry_id WHERE p.account_id=$1 AND ${journalVisible}`,
       values,
       db,
     );
@@ -337,7 +338,7 @@ export async function generalLedger(
       `SELECT p.id,p.entry_id,j.booked_at,j.description,j.reference,${origin} AS origin,p.memo,p.debit,p.credit,
        ($4::bigint + sum(p.amount) OVER (ORDER BY ${order} ROWS UNBOUNDED PRECEDING))::bigint AS balance
        FROM journal_postings p JOIN journal_entries j ON j.id=p.entry_id
-       WHERE p.account_id=$1 AND ($2::date IS NULL OR j.booked_at>=$2) AND ($3::date IS NULL OR j.booked_at<=$3)
+       WHERE ${journalVisible} AND p.account_id=$1 AND ($2::date IS NULL OR j.booked_at>=$2) AND ($3::date IS NULL OR j.booked_at<=$3)
        ORDER BY ${order} LIMIT $5 OFFSET $6`,
       [...values, totals.opening, limit, (page - 1) * limit],
       db,
@@ -362,7 +363,7 @@ export async function financialStatements(
     `SELECT a.id,${accountName} AS name,a.type,coalesce(sum(p.amount),0)::bigint AS balance,
      coalesce(sum(p.amount) FILTER(WHERE j.booked_at>=$2),0)::bigint AS period_amount
      FROM ledger_accounts a LEFT JOIN accounts b ON b.id=a.source_account_id
-     LEFT JOIN (journal_postings p JOIN journal_entries j ON j.id=p.entry_id AND j.booked_at<=$3::date) ON p.account_id=a.id
+     LEFT JOIN (journal_postings p JOIN journal_entries j ON j.id=p.entry_id AND j.booked_at<=$3::date AND ${journalVisible}) ON p.account_id=a.id
      WHERE a.currency=$1 GROUP BY a.id,b.nickname,b.name ORDER BY a.type,name`,
     [currency, from, to],
   );

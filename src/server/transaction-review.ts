@@ -1,8 +1,9 @@
 import { query, pool, type DB } from "./db";
 import { validDate } from "../lib/money";
 import { AppError } from "./errors";
+import { transactionVisible } from "./account-visibility";
 
-export const transactionNeedsReview = `t.status='BOOK' AND t.kind IN ('expense','refund') AND (
+export const transactionNeedsReview = `${transactionVisible} AND t.status='BOOK' AND t.kind IN ('expense','refund') AND (
   NOT EXISTS(SELECT 1 FROM allocations a WHERE a.transaction_id=t.id)
   OR EXISTS(SELECT 1 FROM allocations a WHERE a.transaction_id=t.id AND a.category_id='uncategorized' AND a.amount<>0)
   OR (NOT t.receipt_not_required AND (

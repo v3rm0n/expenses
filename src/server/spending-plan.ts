@@ -11,6 +11,7 @@ import { validDate } from "../lib/money";
 import { query, transaction } from "./db";
 import { dateWindow, overview, spendingAnalysis } from "./reporting";
 import { AppError } from "./errors";
+import { transactionVisible } from "./account-visibility";
 
 const amount = z.number().int().min(0).max(1_000_000_000_000);
 const category = z
@@ -195,7 +196,7 @@ export async function financialOverview(
       outgoing: number;
       count: number;
     }>(
-      `SELECT coalesce(sum(-amount) FILTER(WHERE kind='expense' AND amount<0),0)::bigint AS spending,coalesce(sum(-amount) FILTER(WHERE kind='investment' AND amount<0),0)::bigint AS investment,coalesce(sum(-amount) FILTER(WHERE kind='pension' AND amount<0),0)::bigint AS pension,coalesce(sum(-amount) FILTER(WHERE amount<0 AND kind NOT IN ('transfer','cash_movement')),0)::bigint AS outgoing,count(*)::int AS count FROM transactions WHERE status='PDNG' AND currency=$1`,
+      `SELECT coalesce(sum(-amount) FILTER(WHERE kind='expense' AND amount<0),0)::bigint AS spending,coalesce(sum(-amount) FILTER(WHERE kind='investment' AND amount<0),0)::bigint AS investment,coalesce(sum(-amount) FILTER(WHERE kind='pension' AND amount<0),0)::bigint AS pension,coalesce(sum(-amount) FILTER(WHERE amount<0 AND kind NOT IN ('transfer','cash_movement')),0)::bigint AS outgoing,count(*)::int AS count FROM transactions t WHERE status='PDNG' AND currency=$1 AND ${transactionVisible}`,
       [currency],
     ),
     query<{ spending: number }>(

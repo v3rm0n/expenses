@@ -1,5 +1,6 @@
 import type { DB } from "./db";
 import { query, pool } from "./db";
+import { transactionVisible } from "./account-visibility";
 import {
   matchingRule,
   merchantCategory,
@@ -213,7 +214,7 @@ export async function autoMatchReceipt(receiptId: string, db: DB = pool) {
       : receipt.retailer;
   if (!merchant || merchant === "unknown") return;
   const candidates = await query(
-    `SELECT t.* FROM transactions t WHERE t.status='BOOK' AND t.currency=$1 AND t.amount=$2
+    `SELECT t.* FROM transactions t WHERE ${transactionVisible} AND t.status='BOOK' AND t.currency=$1 AND t.amount=$2
     AND t.kind=$3 AND t.booked_at BETWEEN $4::date-1 AND $4::date+7 AND t.merchant ILIKE ANY($5::text[])
     AND NOT EXISTS(SELECT 1 FROM receipt_payments p WHERE p.transaction_id=t.id)`,
     [
@@ -253,7 +254,7 @@ async function autoMatchAmazonOrder(orderId: string, db: DB) {
     through = date,
   ) =>
     query(
-      `SELECT t.id FROM transactions t WHERE t.status='BOOK' AND t.currency=$1 AND t.amount=$2 AND t.kind=$3
+      `SELECT t.id FROM transactions t WHERE ${transactionVisible} AND t.status='BOOK' AND t.currency=$1 AND t.amount=$2 AND t.kind=$3
     AND t.booked_at BETWEEN $4::date-1 AND $5::date+7 AND t.merchant ILIKE ANY(ARRAY['%amazon%','%amzn%'])
     AND NOT EXISTS(SELECT 1 FROM receipt_payments p WHERE p.transaction_id=t.id)`,
       [currency, -amount, amount > 0 ? "expense" : "refund", date, through],
@@ -362,7 +363,7 @@ async function autoMatchWoltOrder(orderId: string, db: DB) {
   )
     return;
   const candidates = await query(
-    `SELECT t.id FROM transactions t WHERE t.status='BOOK' AND t.currency=$1 AND t.amount=$2 AND t.kind='expense'
+    `SELECT t.id FROM transactions t WHERE ${transactionVisible} AND t.status='BOOK' AND t.currency=$1 AND t.amount=$2 AND t.kind='expense'
     AND t.booked_at BETWEEN $3::date-1 AND $3::date+7 AND t.merchant ILIKE '%wolt%'
     AND NOT EXISTS(SELECT 1 FROM receipt_payments p WHERE p.transaction_id=t.id)`,
     [first.currency, -total, first.purchased_at],

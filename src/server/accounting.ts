@@ -1,6 +1,7 @@
 import { query, transaction, type DB, pool } from "./db";
 import { validDate } from "../lib/money";
 import { AppError } from "./errors";
+import { journalVisible, transactionVisible } from "./account-visibility";
 import type { AccountType } from "../lib/accounting";
 
 export async function trialBalance(
@@ -39,12 +40,12 @@ export async function trialBalance(
       coalesce(sum(greatest(coalesce(sum(p.amount),0),0)) OVER (),0)::bigint AS total_balance_debit,
       coalesce(sum(greatest(-coalesce(sum(p.amount),0),0)) OVER (),0)::bigint AS total_balance_credit,
       o.booked_at AS opening_date,
-      (SELECT min(fj.booked_at) FROM journal_entries fj JOIN journal_postings fp ON fp.entry_id=fj.id
-        WHERE fp.account_id=a.id AND fj.opening_account_id IS NULL) AS first_date,
+      (SELECT min(j.booked_at) FROM journal_entries j JOIN journal_postings fp ON fp.entry_id=j.id
+        WHERE fp.account_id=a.id AND j.opening_account_id IS NULL AND ${journalVisible}) AS first_date,
       coalesce((SELECT sum(op.amount) FROM journal_postings op WHERE op.entry_id=o.id AND op.account_id=a.id),0)::bigint AS opening_balance
     FROM ledger_accounts a LEFT JOIN accounts b ON b.id=a.source_account_id
     LEFT JOIN journal_entries o ON o.opening_account_id=a.id
-    LEFT JOIN (journal_postings p JOIN journal_entries j ON j.id=p.entry_id AND ($2::date IS NULL OR j.booked_at<=$2)) ON p.account_id=a.id
+    LEFT JOIN (journal_postings p JOIN journal_entries j ON j.id=p.entry_id AND ($2::date IS NULL OR j.booked_at<=$2) AND ${journalVisible}) ON p.account_id=a.id
     WHERE a.currency=$1 GROUP BY a.id,b.nickname,b.name,o.id,o.booked_at ORDER BY a.type,name,a.code`,
     [currency, through || null],
     db,
@@ -71,7 +72,10 @@ export async function trialBalance(
 }
 
 export async function transactionJournal(id: string) {
-  const [entry] = await query("SELECT * FROM transactions WHERE id=$1", [id]);
+  const [entry] = await query(
+    `SELECT t.* FROM transactions t WHERE t.id=$1 AND ${transactionVisible}`,
+    [id],
+  );
   if (!entry) throw new AppError("Transaction not found.", 404);
   const [journal] = await query(
     "SELECT * FROM journal_entries WHERE transaction_id=$1",

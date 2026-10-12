@@ -23,6 +23,7 @@ import {
   type SimilarTransaction,
 } from "./similar-transactions";
 import { query, transaction, migrate } from "./db";
+import { transactionVisible } from "./account-visibility";
 import {
   trialBalance,
   transactionJournal,
@@ -382,6 +383,23 @@ export async function handleApi(
     }
     if (
       segments[0] === "accounts" &&
+      segments.length === 3 &&
+      segments[2] === "ignore" &&
+      method === "POST"
+    ) {
+      const id = uuid(segments[1]);
+      const input = z
+        .object({ ignored: z.boolean() })
+        .parse(await request.json());
+      const [account] = await query(
+        "UPDATE accounts SET ignored=$2 WHERE id=$1 AND source='bank' RETURNING id,ignored",
+        [id, input.ignored],
+      );
+      if (!account) throw new AppError("Bank account not found.", 404);
+      return json(account);
+    }
+    if (
+      segments[0] === "accounts" &&
       segments.length === 2 &&
       method === "POST"
     ) {
@@ -565,7 +583,7 @@ export async function handleApi(
       method === "GET"
     ) {
       const [entry] = await query<SimilarTransaction>(
-        "SELECT * FROM transactions WHERE id=$1",
+        `SELECT t.* FROM transactions t WHERE t.id=$1 AND ${transactionVisible}`,
         [uuid(segments[1])],
       );
       if (!entry) throw new AppError("Transaction not found.", 404);
@@ -638,7 +656,7 @@ export async function handleApi(
       }
       if (method === "GET") {
         const [entry] = await query(
-          "SELECT t.*,COALESCE(NULLIF(a.nickname,''),a.name) AS account_name,a.source FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE t.id=$1",
+          "SELECT t.*,COALESCE(NULLIF(a.nickname,''),a.name) AS account_name,a.source FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE t.id=$1 AND NOT a.ignored",
           [id],
         );
         if (!entry) throw new AppError("Transaction not found.", 404);

@@ -66,6 +66,148 @@ const check = (message: string, fn: () => Promise<void>) =>
 try {
   await migrate();
   await check(
+    "ignoring accounts hides stored transactions and totals reversibly",
+    async () => {
+      const { transactionList, transactionFilters, applicationState } =
+        await import("../src/server/reporting");
+      const { transactionReviewQueue } =
+        await import("../src/server/transaction-review");
+      const { trialBalance } = await import("../src/server/accounting");
+      const { journalPage, financialStatements } =
+        await import("../src/server/bookkeeping");
+      const wallets = await query(
+        "INSERT INTO accounts(identification_hash,name,currency) VALUES('visibility-kept','Kept','PLN'),('visibility-hidden','Hidden','PLN') RETURNING id",
+      );
+      const entries: string[] = [];
+      await query(
+        "INSERT INTO owner(id,name,password_hash) VALUES(1,'Visibility test','unused')",
+      );
+      const [receipt] = await query(
+        "INSERT INTO receipts(file_hash,filename,content_type,storage_path,purchased_at,total,currency) VALUES('visibility-test','visibility.txt','text/plain','visibility-test','2028-01-05',500,'PLN') RETURNING id",
+      );
+      try {
+        for (const wallet of wallets) {
+          await importBankTransactions(wallet.id, [
+            {
+              entry_reference: `expense-${wallet.id}`,
+              transaction_amount: { amount: "5.00", currency: "PLN" },
+              credit_debit_indicator: "DBIT",
+              status: "BOOK",
+              booking_date: "2028-01-05",
+              creditor: { name: "Visibility shop" },
+            },
+            {
+              entry_reference: `pending-${wallet.id}`,
+              transaction_amount: { amount: "2.00", currency: "PLN" },
+              credit_debit_indicator: "DBIT",
+              status: "PDNG",
+              booking_date: "2028-01-06",
+              creditor: { name: "Visibility shop" },
+            },
+          ]);
+        }
+        entries.push(
+          ...(
+            await query(
+              "SELECT id FROM transactions WHERE account_id=ANY($1::uuid[])",
+              [wallets.map((w) => w.id)],
+            )
+          ).map((t) => t.id),
+        );
+        const filters = new URLSearchParams({
+          currency: "PLN",
+          from: "2028-01-01",
+          to: "2028-01-31",
+          limit: "1",
+        });
+        const baselineReview = (await applicationState()).review.transactions;
+        for (const ignored of [false, true, false]) {
+          await query("UPDATE accounts SET ignored=$2 WHERE id=$1", [
+            wallets[1].id,
+            ignored,
+          ]);
+          const expected = ignored ? 1 : 2;
+          assert.equal(
+            (await receiptDetail(receipt.id)).candidates.length,
+            expected * 2,
+          );
+          const list = await transactionList(filters);
+          assert.equal(list.count, expected * 2);
+          assert.equal(list.rows.length, 1);
+          assert.equal(
+            (
+              await transactionList(
+                new URLSearchParams({
+                  currency: "PLN",
+                  account: wallets[1].id,
+                }),
+              )
+            ).count,
+            ignored ? 0 : 2,
+          );
+          const { where, values } = transactionFilters(filters);
+          assert.equal(
+            (
+              await query(
+                `SELECT count(*)::int AS count FROM transactions t WHERE ${where}`,
+                values,
+              )
+            )[0].count,
+            expected * 2,
+          );
+          const summary = await overview("2028-01", "PLN");
+          assert.equal(summary.spending, expected * 500);
+          assert.equal(summary.transactions, expected);
+          assert.equal(summary.pending.count, expected);
+          assert.equal(summary.pending.amount, expected * 200);
+          assert.equal(
+            summary.categories.reduce((sum, c) => sum + c.amount, 0),
+            expected * 500,
+          );
+          const analysis = await spendingAnalysis("2028-01", "PLN");
+          assert.equal(analysis.months.at(-1)?.spending, expected * 500);
+          assert.equal(
+            (await transactionReviewQueue(filters)).ids.length,
+            expected,
+          );
+          assert.equal(
+            (await applicationState()).review.transactions,
+            baselineReview - (ignored ? 1 : 0),
+          );
+          const journals = await journalPage({ currency: "PLN" });
+          assert.equal(journals.count, expected);
+          const balance = await trialBalance("PLN");
+          assert.equal(balance.debit, expected * 500);
+          assert.equal(balance.credit, expected * 500);
+          assert.equal(
+            (await financialStatements("PLN", "2028-01-01", "2028-01-31"))
+              .expenses,
+            expected * 500,
+          );
+          assert.equal(
+            (
+              await query(
+                "SELECT count(*)::int AS count FROM transactions WHERE id=ANY($1::uuid[])",
+                [entries],
+              )
+            )[0].count,
+            4,
+          );
+        }
+      } finally {
+        await query("DELETE FROM receipts WHERE id=$1", [receipt.id]);
+        await query("DELETE FROM owner WHERE id=1");
+        await query(
+          "DELETE FROM transactions WHERE account_id=ANY($1::uuid[])",
+          [wallets.map((w) => w.id)],
+        );
+        await query("DELETE FROM accounts WHERE id=ANY($1::uuid[])", [
+          wallets.map((w) => w.id),
+        ]);
+      }
+    },
+  );
+  await check(
     "saved similar categories apply to future bank imports with the same matching criteria",
     async () => {
       const { saveSimilarCategoryRule } =
@@ -727,6 +869,113 @@ try {
         "verification",
       );
       assert.match((await readEmailMessage(email.id)).text, /987654321/);
+    },
+  );
+  await check(
+    "ignored accounts skip bank requests and retain history until included again",
+    async () => {
+      const [connection] = await query(
+        "INSERT INTO bank_connections(bank_name,country,session_cipher,valid_until) VALUES('Ignored account test','EE',$1,now()+interval '30 days') RETURNING id",
+        [encrypt({ id: "ignored-account-session" })],
+      );
+      const [account] = await query(
+        "INSERT INTO accounts(connection_id,identification_hash,provider_uid,name,currency) VALUES($1,'ignore-test:EUR','test-wallet','Included wallet','EUR') RETURNING id",
+        [connection.id],
+      );
+      const [usd] = await query(
+        "INSERT INTO accounts(connection_id,identification_hash,provider_uid,name,currency,ignored) VALUES($1,'ignore-test:USD','ignored-wallet','Ignored wallet','USD',true) RETURNING id",
+        [connection.id],
+      );
+      await importBankTransactions(usd.id, [
+        {
+          entry_reference: "ignored-history",
+          transaction_amount: { amount: "2.00", currency: "USD" },
+          credit_debit_indicator: "DBIT",
+          status: "BOOK",
+          booking_date: "2026-01-05",
+          remittance_information: ["Existing history"],
+        },
+      ]);
+      const [before] = await query(
+        "SELECT last_sync_at,balance,(SELECT count(*)::int FROM transactions WHERE account_id=accounts.id) AS transactions FROM accounts WHERE id=$1",
+        [usd.id],
+      );
+      const originalFetch = globalThis.fetch;
+      const calls: string[] = [];
+      try {
+        globalThis.fetch = async (input) => {
+          calls.push(new URL(String(input)).pathname);
+          return Response.json({ transactions: [], balances: [] });
+        };
+        await syncBank(connection.id);
+        assert.ok(calls.some((url) => url.includes("/test-wallet/")));
+        assert.ok(!calls.some((url) => url.includes("/ignored-wallet/")));
+        const [after] = await query(
+          "SELECT last_sync_at,balance,(SELECT count(*)::int FROM transactions WHERE account_id=accounts.id) AS transactions FROM accounts WHERE id=$1",
+          [usd.id],
+        );
+        assert.deepEqual(after, before);
+        await query("UPDATE accounts SET ignored=false WHERE id=$1", [usd.id]);
+        calls.length = 0;
+        await syncBank(connection.id);
+        assert.ok(calls.includes("/accounts/ignored-wallet/transactions"));
+        assert.ok(calls.includes("/accounts/ignored-wallet/balances"));
+        await query("UPDATE accounts SET ignored=true WHERE id=$1", [usd.id]);
+        const state = "ignored-account-state",
+          ownerSession = "ignored-account-owner";
+        await query(
+          "INSERT INTO bank_states(state_hash,session_hash,bank,valid_until,expires_at) VALUES($1,$2,$3,now()+interval '30 days',now()+interval '20 minutes')",
+          [
+            digest(state),
+            ownerSession,
+            JSON.stringify({ name: "Ignored account test", country: "EE" }),
+          ],
+        );
+        globalThis.fetch = async () =>
+          Response.json({
+            session_id: "renewed-ignored-account-session",
+            access: {
+              valid_until: new Date(Date.now() + 30 * 86400000).toISOString(),
+            },
+            accounts: [
+              {
+                uid: "renewed-ignored-wallet",
+                identification_hash: "ignore-test",
+                currency: "USD",
+              },
+            ],
+          });
+        await completeBankAuthorization(
+          state,
+          "authorization-code",
+          ownerSession,
+        );
+        const [renewed] = await query(
+          "SELECT ignored,provider_uid FROM accounts WHERE id=$1",
+          [usd.id],
+        );
+        assert.equal(renewed.ignored, true);
+        assert.equal(renewed.provider_uid, "renewed-ignored-wallet");
+        calls.length = 0;
+        globalThis.fetch = async (input) => {
+          calls.push(String(input));
+          return Response.json({ transactions: [], balances: [] });
+        };
+        await syncBank(connection.id);
+        assert.deepEqual(calls, []);
+      } finally {
+        globalThis.fetch = originalFetch;
+        await query(
+          "DELETE FROM transactions WHERE account_id=ANY($1::uuid[])",
+          [[account.id, usd.id]],
+        );
+        await query("DELETE FROM accounts WHERE id=ANY($1::uuid[])", [
+          [account.id, usd.id],
+        ]);
+        await query("DELETE FROM bank_connections WHERE id=$1", [
+          connection.id,
+        ]);
+      }
     },
   );
   await check(

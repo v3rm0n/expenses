@@ -146,6 +146,7 @@ export function FinancialOverviewView({
   const bankAccounts = ctx.state.accounts.filter(
     (account) =>
       account.source === "bank" &&
+      !account.ignored &&
       (!account.currency || account.currency === ctx.currency),
   );
   const syncs = bankAccounts

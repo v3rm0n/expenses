@@ -173,6 +173,7 @@ export type Account = {
   id: string;
   name: string;
   nickname: string | null;
+  ignored: boolean;
   source: string;
   bank_name?: string;
   currency: string | null;

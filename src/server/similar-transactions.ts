@@ -1,6 +1,7 @@
 import { query, pool, type DB } from "./db";
 import { matchesSimilarTransaction } from "../lib/similar-transactions";
 import { normalize } from "../lib/classification";
+import { transactionVisible } from "./account-visibility";
 
 export async function saveSimilarCategoryRule(
   entry: { merchant: string; kind: string; currency: string },
@@ -78,7 +79,7 @@ export async function similarTransactions(
     : null;
   if (candidates && !candidates.length) return [];
   const rows = await query<SimilarTransaction>(
-    `SELECT t.* FROM transactions t WHERE t.id<>$1 AND t.kind=$2 AND t.currency=$3
+    `SELECT t.* FROM transactions t WHERE ${transactionVisible} AND t.id<>$1 AND t.kind=$2 AND t.currency=$3
     AND t.status IN ('BOOK','PDNG') ${includeManual ? "" : "AND NOT t.manual"}
     ${candidates ? "AND t.id=ANY($4::uuid[])" : ""}
     AND NOT EXISTS(SELECT 1 FROM receipt_payments p WHERE p.transaction_id=t.id)

@@ -2,6 +2,7 @@ import { query, type DB, pool } from "./db";
 import { validDate, parseMoney } from "../lib/money";
 import { AppError } from "./errors";
 import { transactionNeedsReview } from "./transaction-review";
+import { transactionVisible, journalVisible } from "./account-visibility";
 import type {
   Contributions,
   MonthlyTotals,
@@ -80,12 +81,12 @@ export async function overview(month: string, currency: string, months = 1) {
     }),
   );
   const [pending] = await query(
-    "SELECT count(*)::int AS count,coalesce(sum(-amount) FILTER(WHERE amount<0),0)::bigint AS amount FROM transactions WHERE status='PDNG' AND currency=$1",
+    `SELECT count(*)::int AS count,coalesce(sum(-amount) FILTER(WHERE amount<0),0)::bigint AS amount FROM transactions t WHERE status='PDNG' AND currency=$1 AND ${transactionVisible}`,
     [currency],
   );
   const [cash] = await query(
     `SELECT coalesce(sum(p.amount),0)::bigint AS amount FROM journal_postings p
-    JOIN ledger_accounts a ON a.id=p.account_id WHERE a.code='cash:'||$1`,
+    JOIN ledger_accounts a ON a.id=p.account_id JOIN journal_entries j ON j.id=p.entry_id WHERE a.code='cash:'||$1 AND ${journalVisible}`,
     [currency],
   );
   return {
@@ -185,7 +186,7 @@ export async function spendingAnalysis(
 
 export function transactionFilters(params: URLSearchParams) {
   const values: unknown[] = [],
-    conditions: string[] = ["t.status<>'SUPERSEDED'"];
+    conditions: string[] = ["t.status<>'SUPERSEDED'", transactionVisible];
   const add = (condition: string, value: unknown) => {
     values.push(value);
     conditions.push(condition.replace(/\?/g, `$${values.length}`));
@@ -325,7 +326,7 @@ export async function receiptDetail(
     LIMIT 4`,
   );
   const links = await query(
-    `SELECT p.*,t.merchant,t.booked_at,t.currency,t.amount AS transaction_amount,t.status,t.description,COALESCE(NULLIF(a.nickname,''),a.name) AS account_name,a.source FROM receipt_payments p JOIN transactions t ON t.id=p.transaction_id JOIN accounts a ON a.id=t.account_id WHERE p.receipt_id=$1`,
+    `SELECT p.*,t.merchant,t.booked_at,t.currency,t.amount AS transaction_amount,t.status,t.description,COALESCE(NULLIF(a.nickname,''),a.name) AS account_name,a.source FROM receipt_payments p JOIN transactions t ON t.id=p.transaction_id JOIN accounts a ON a.id=t.account_id WHERE p.receipt_id=$1 AND NOT a.ignored`,
     [id],
   );
   const candidates =
@@ -333,7 +334,7 @@ export async function receiptDetail(
       ? await query(
           `SELECT t.id,t.merchant,t.description,t.status,t.booked_at,t.amount,t.currency,COALESCE(NULLIF(a.nickname,''),a.name) AS account_name,
     abs(t.amount)-coalesce((SELECT sum(p.amount)::bigint FROM receipt_payments p WHERE p.transaction_id=t.id),0) AS available_amount
-    FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE t.status IN ('BOOK','PDNG') AND t.currency=$1 AND t.kind=$2
+    FROM transactions t JOIN accounts a ON a.id=t.account_id WHERE NOT a.ignored AND t.status IN ('BOOK','PDNG') AND t.currency=$1 AND t.kind=$2
     AND coalesce(t.booked_at,t.value_at,t.created_at::date) BETWEEN $3::date-1 AND $3::date+7 AND NOT EXISTS(SELECT 1 FROM receipt_payments p WHERE p.receipt_id=$4 AND p.transaction_id=t.id)
     AND abs(t.amount)>coalesce((SELECT sum(p.amount)::bigint FROM receipt_payments p WHERE p.transaction_id=t.id),0)
     ORDER BY CASE WHEN t.id=$6::uuid THEN 0 ELSE 1 END,abs(abs(t.amount)-abs($5::bigint)),CASE WHEN t.status='BOOK' THEN 0 ELSE 1 END,t.booked_at,t.id LIMIT 30`,

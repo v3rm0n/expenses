@@ -101,6 +101,28 @@ export async function migrate() {
           ),
         );
       }
+      if (
+        !(await db.query("SELECT 1 FROM schema_migrations WHERE version=6"))
+          .rowCount
+      ) {
+        await db.query(
+          await readFile(
+            path.resolve("migrations/006-ignored-accounts.sql"),
+            "utf8",
+          ),
+        );
+      }
+      if (
+        !(await db.query("SELECT 1 FROM schema_migrations WHERE version=7"))
+          .rowCount
+      ) {
+        await db.query(
+          await readFile(
+            path.resolve("migrations/007-hidden-account-transactions.sql"),
+            "utf8",
+          ),
+        );
+      }
     }).catch((error) => {
       globalDb.expenseMigration = undefined;
       throw error;

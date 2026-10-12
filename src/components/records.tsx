@@ -260,12 +260,14 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
                 onChange={(e) => setFilter("account", e.target.value)}
               >
                 <option value="">All accounts</option>
-                {ctx.state.accounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.nickname || a.name}
-                    {a.currency ? ` · ${a.currency}` : ""}
-                  </option>
-                ))}
+                {ctx.state.accounts
+                  .filter((a) => !a.ignored)
+                  .map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.nickname || a.name}
+                      {a.currency ? ` · ${a.currency}` : ""}
+                    </option>
+                  ))}
               </select>
             </label>
             <label className="transaction-filter-label">

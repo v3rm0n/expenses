@@ -100,6 +100,57 @@ function AccountNickname({
   );
 }
 
+function AccountSync({
+  account,
+  context: ctx,
+}: {
+  account: Account;
+  context: AppContext;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const toggle = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`accounts/${account.id}/ignore`, { ignored: !account.ignored });
+      ctx.refresh();
+      ctx.notify(
+        account.ignored
+          ? "Account included. Refresh the bank to import its transactions."
+          : "Account ignored. Transactions are hidden and future imports will skip it.",
+      );
+    } catch (error) {
+      setError((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="account-sync">
+      {account.ignored && <Badge variant="warning">Ignored</Badge>}
+      <small className="muted">
+        {account.ignored
+          ? "Transactions are hidden from lists and reports, and imports are stopped. Include the account to show its history again."
+          : "Ignore this account to hide its transactions from lists and reports and stop new imports. Its history is kept."}
+      </small>
+      <ErrorMessage message={error} />
+      <button
+        className="button secondary"
+        type="button"
+        disabled={busy}
+        onClick={toggle}
+      >
+        {busy
+          ? "Saving…"
+          : account.ignored
+            ? "Include account"
+            : "Ignore account"}
+      </button>
+    </div>
+  );
+}
+
 export function ConnectionsView({ context: ctx }: { context: AppContext }) {
   const search = useSearchParams();
   const [country, setCountry] = useState("EE"),
@@ -305,6 +356,9 @@ export function ConnectionsView({ context: ctx }: { context: AppContext }) {
                   </small>
                 )}
                 <AccountNickname account={account} context={ctx} />
+                {account.source === "bank" && (
+                  <AccountSync account={account} context={ctx} />
+                )}
               </div>
             ))}
           </div>

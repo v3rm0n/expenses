@@ -534,7 +534,7 @@ export async function syncBank(
     if (new Date(connection.valid_until).valueOf() <= Date.now())
       throw new AppError("Bank consent has expired. Reconnect this bank.", 410);
     const accounts = await query(
-      "SELECT * FROM accounts WHERE connection_id=$1 AND provider_uid IS NOT NULL",
+      "SELECT * FROM accounts WHERE connection_id=$1 AND provider_uid IS NOT NULL AND NOT ignored",
       [connectionId],
       db,
     );

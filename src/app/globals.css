@@ -1761,6 +1761,16 @@ input[type="color"]::-webkit-color-swatch {
 .account-nickname .button {
   align-self: flex-start;
 }
+.account-sync {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-top: 12px;
+}
+.account-sync .button,
+.account-sync .badge {
+  align-self: flex-start;
+}
 .account-bank {
   color: var(--muted);
   font-size: 9px;
