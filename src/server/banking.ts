@@ -454,6 +454,11 @@ async function settlePendingPayment(entryId: string, db: DB) {
           "UPDATE transactions SET receipt_not_required=true WHERE id=$1",
           [entry.id],
         );
+      if (predecessor.forecast_excluded)
+        await db.query(
+          "UPDATE transactions SET forecast_excluded=true WHERE id=$1",
+          [entry.id],
+        );
       if (predecessor.manual && !entry.manual) {
         await db.query(
           "UPDATE transactions SET kind=$2,manual=true,note=$3 WHERE id=$1",

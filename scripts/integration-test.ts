@@ -519,6 +519,26 @@ try {
           Math.max(5000, Math.ceil(12000 / (13 - Number(month.slice(5, 7))))) -
             2000,
         );
+        // One-off flags alter only the forecast pace, not booked totals or goals.
+        await query(
+          "UPDATE transactions SET forecast_excluded=true WHERE account_id=$1 AND source_key='expense'",
+          [account.id],
+        );
+        const oneOff = await financialOverview(month, "BRL");
+        assert.equal(oneOff.spending, report.spending);
+        assert.equal(
+          oneOff.categories.find((c) => c.id === "groceries")?.oneOffAmount,
+          10000,
+        );
+        assert.equal(oneOff.outlook.variableSpent, 0);
+        assert.equal(
+          oneOff.outlook.forecastSpending,
+          report.spending + report.pending.spending,
+        );
+        await query(
+          "UPDATE transactions SET forecast_excluded=false WHERE account_id=$1",
+          [account.id],
+        );
         await assert.rejects(
           saveSpendingPlan(month, "BRL", {
             ...plan,
@@ -3165,7 +3185,7 @@ KUUPÄEV: 02.10.2026`;
         "SELECT id FROM transactions WHERE source_key='ref:manual-pending'",
       );
       await query(
-        "UPDATE transactions SET manual=true,note='Owner correction' WHERE id=$1",
+        "UPDATE transactions SET manual=true,forecast_excluded=true,note='Owner correction' WHERE id=$1",
         [pending.id],
       );
       await query(
@@ -3180,10 +3200,27 @@ KUUPÄEV: 02.10.2026`;
         ),
       );
       const [booked] = await query(
-        "SELECT id,manual,note FROM transactions WHERE source_key='ref:manual-settled'",
+        "SELECT id,manual,note,forecast_excluded FROM transactions WHERE source_key='ref:manual-settled'",
       );
       assert.equal(booked.manual, true);
       assert.equal(booked.note, "Owner correction");
+      assert.equal(booked.forecast_excluded, true);
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [bank("manual-settled", "3.00", "TEST OWNER SHOP")],
+          db,
+        ),
+      );
+      assert.equal(
+        (
+          await query(
+            "SELECT forecast_excluded FROM transactions WHERE id=$1",
+            [booked.id],
+          )
+        )[0].forecast_excluded,
+        true,
+      );
       assert.deepEqual(
         await query(
           "SELECT category_id,amount FROM allocations WHERE transaction_id=$1",

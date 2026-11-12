@@ -205,6 +205,7 @@ export type Entry = {
   note: string;
   receipt_count?: number;
   receipt_not_required: boolean;
+  forecast_excluded: boolean;
   allocations: Array<{
     category_id: string;
     amount: number;

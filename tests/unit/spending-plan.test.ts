@@ -122,6 +122,117 @@ describe("spending outlook", () => {
       result.categories.find((row) => row.id === "housing")?.projected,
     ).toBe(62000);
   });
+  it("counts fixed bills and occasional purchases once without a configured plan", () => {
+    const result = spendingOutlook(
+      input({
+        month: "2026-11",
+        today: "2026-11-12",
+        plan: emptyPlan(),
+        spending: 200000,
+        categories: [
+          { id: "housing", name: "Housing", color: "", amount: 100000 },
+          { id: "utilities", name: "Utilities", color: "", amount: 10000 },
+          { id: "travel", name: "Travel", color: "", amount: 50000 },
+          { id: "groceries", name: "Groceries", color: "", amount: 40000 },
+        ],
+        pending: {
+          spending: 2000,
+          investment: 0,
+          pension: 0,
+          outgoing: 2000,
+          count: 1,
+        },
+      }),
+    );
+    expect(result.variableSpent).toBe(40000);
+    expect(result.variableRemaining).toBe(60000);
+    expect(result.forecastSpending).toBe(262000);
+    expect(result.excludedFromPace).toBe(160000);
+    expect(result.categories.find((c) => c.id === "housing")?.projected).toBe(
+      100000,
+    );
+    expect(result.categories.find((c) => c.id === "travel")?.projected).toBe(
+      50000,
+    );
+  });
+  it("does not repeat one-off purchases even when a category explicitly uses daily pace", () => {
+    const base = input();
+    const result = spendingOutlook(
+      input({
+        spending: 60000,
+        categories: [
+          {
+            id: "groceries",
+            name: "Groceries",
+            color: "",
+            amount: 60000,
+            oneOffAmount: 20000,
+          },
+        ],
+        plan: {
+          ...base.plan,
+          budgets: [
+            { categoryId: "groceries", amount: 100000, flexible: true },
+          ],
+        },
+      }),
+    );
+    expect(result.variableSpent).toBe(40000);
+    expect(result.forecastSpending).toBe(144000);
+    expect(result.categories[0].projected).toBe(144000);
+    expect(result.surplus).toBe(190000);
+  });
+  it("honors explicit category pace overrides and counts unpaid bills once", () => {
+    const base = input();
+    const result = spendingOutlook(
+      input({
+        spending: 60000,
+        categories: [
+          { id: "groceries", name: "Groceries", color: "", amount: 40000 },
+          { id: "travel", name: "Travel", color: "", amount: 20000 },
+        ],
+        plan: {
+          ...base.plan,
+          budgets: [
+            { categoryId: "groceries", amount: 40000, flexible: false },
+            { categoryId: "travel", amount: 50000, flexible: true },
+          ],
+          bills: [
+            {
+              id: "unpaid",
+              name: "Rent",
+              categoryId: "housing",
+              status: "unpaid",
+              dueDay: 20,
+              amount: 50000,
+            },
+          ],
+        },
+      }),
+    );
+    expect(result.variableSpent).toBe(20000);
+    expect(result.forecastSpending).toBe(152000);
+    expect(result.categories.find((c) => c.id === "groceries")?.projected).toBe(
+      40000,
+    );
+  });
+  it("reconciles category projections to the headline and leaves completed months unchanged", () => {
+    const categories = ["groceries", "restaurants", "transport"].map((id) => ({
+      id,
+      name: id,
+      color: "",
+      amount: 101,
+    }));
+    const result = spendingOutlook(input({ spending: 303, categories }));
+    expect(result.categories.reduce((sum, c) => sum + c.projected, 0)).toBe(
+      result.forecastSpending,
+    );
+    const past = spendingOutlook(
+      input({ month: "2026-09", spending: 303, categories }),
+    );
+    expect(past.forecastSpending).toBe(303);
+    expect(past.variableRemaining).toBe(0);
+  });
   it("checks cash before payday separately, without assuming future income has arrived", () => {
     const base = input();
     const result = spendingOutlook(

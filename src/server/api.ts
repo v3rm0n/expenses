@@ -686,6 +686,7 @@ export async function handleApi(
             automatic: z.boolean().default(false),
             similarPattern: z.string().trim().max(200).optional(),
             similarIncludeManual: z.boolean().default(false),
+            forecastExcluded: z.boolean().optional(),
             allocations: z
               .array(z.object({ category_id: identifier, amount: moneyInput }))
               .max(100)
@@ -749,8 +750,14 @@ export async function handleApi(
             );
           }
           await db.query(
-            "UPDATE transactions SET kind=$2,note=$3,manual=$4,updated_at=now() WHERE id=$1",
-            [id, input.kind, input.note, !input.automatic],
+            "UPDATE transactions SET kind=$2,note=$3,manual=$4,forecast_excluded=coalesce($5,forecast_excluded),updated_at=now() WHERE id=$1",
+            [
+              id,
+              input.kind,
+              input.note,
+              !input.automatic,
+              input.forecastExcluded,
+            ],
           );
           if (input.automatic) await applyAllocations(id, db, true);
           else {

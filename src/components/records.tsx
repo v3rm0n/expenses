@@ -674,6 +674,7 @@ export function TransactionDetailView({
   const [receiptNotRequired, setReceiptNotRequired] = useState(false),
     [receiptBusy, setReceiptBusy] = useState(false);
   const loadedClassification = useRef<string | null>(null);
+  const [forecastExcluded, setForecastExcluded] = useState(false);
   const [kind, setKind] = useState("expense"),
     [note, setNote] = useState(""),
     [automatic, setAutomatic] = useState(false),
@@ -714,6 +715,7 @@ export function TransactionDetailView({
         data.kind,
         data.note,
         data.allocations,
+        data.forecast_excluded,
       ]);
       // A receipt action refreshes this record too. Keep unsaved category edits
       // when only receipt links or the receipt requirement have changed.
@@ -723,6 +725,7 @@ export function TransactionDetailView({
       setIncludeManual(false);
       setSimilarPattern(suggestedDescriptionPattern(data.description));
       setKind(data.kind);
+      setForecastExcluded(data.forecast_excluded);
       setNote(data.note);
       setAutomatic(false);
       setRows(
@@ -763,6 +766,7 @@ export function TransactionDetailView({
         kind,
         note,
         automatic,
+        forecastExcluded,
         allocations: rows,
         ...(applySimilar && canApplySimilar
           ? { similarPattern, similarIncludeManual: includeManual }
@@ -937,6 +941,22 @@ export function TransactionDetailView({
               />
               Use automatic categories and receipt breakdown
             </label>
+            {["expense", "refund"].includes(kind) && (
+              <>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={forecastExcluded}
+                    onChange={(e) => setForecastExcluded(e.target.checked)}
+                  />
+                  One-off purchase
+                </label>
+                <p className="form-help">
+                  Count this payment in actual spending, but do not project
+                  repeats in the month-end forecast. Saved with your changes.
+                </p>
+              </>
+            )}
             {["expense", "refund"].includes(kind) && !automatic && (
               <>
                 <div className="allocation-list">

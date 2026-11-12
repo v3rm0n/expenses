@@ -5,6 +5,7 @@ import { decimalMoney, parseMoney } from "../lib/money";
 import { monthLabel } from "../lib/dates";
 import {
   emptyPlan,
+  projectsDailyPace,
   type SpendingPlan,
   type FinancialOverview,
 } from "../lib/spending-plan";
@@ -283,8 +284,9 @@ function PlanForm({
         <fieldset disabled={busy}>
           <legend>Category limits</legend>
           <p className="form-help">
-            Mark categories flexible when their spending can be reduced. Fixed
-            categories are not extrapolated at a daily pace.
+            Enable daily pace only for spending that repeats throughout the
+            month. Everyday categories use daily pace by default; fixed bills
+            and occasional purchases count once.
           </p>
           <div className="plan-rows">
             {draft.budgets.map((row, index) => (
@@ -346,7 +348,7 @@ function PlanForm({
                       }))
                     }
                   />
-                  Flexible spending
+                  Project daily spending pace
                 </label>
                 <button
                   type="button"
@@ -378,7 +380,11 @@ function PlanForm({
                   ...previous,
                   budgets: [
                     ...previous.budgets,
-                    { categoryId: category.id, amount: "", flexible: true },
+                    {
+                      categoryId: category.id,
+                      amount: "",
+                      flexible: projectsDailyPace(category.id),
+                    },
                   ],
                 }));
             }}

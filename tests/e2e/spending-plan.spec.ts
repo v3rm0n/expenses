@@ -319,3 +319,76 @@ test("spending plans persist, update allowance and annual goals, and work on nar
   ).toBe(400);
   expect(pageErrors).toEqual([]);
 });
+
+test("one-off purchases stay in actual spending and stop contributing to daily pace", async ({
+  page,
+}) => {
+  const status = await (await page.request.get("/api/auth/status")).json();
+  await page.request.post(
+    status.needsSetup ? "/api/auth/setup" : "/api/auth/login",
+    {
+      headers,
+      data: status.needsSetup
+        ? {
+            name: "Test owner",
+            password,
+            token: "expenses-test-setup-token-only",
+          }
+        : { password },
+    },
+  );
+  const today = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Europe/Tallinn",
+  }).format(new Date());
+  const created = await page.request.post("/api/transactions", {
+    headers,
+    data: {
+      merchant: "One-off grocery stock-up",
+      amount: "200",
+      kind: "expense",
+      date: today,
+      currency: "ZAR",
+      category: "groceries",
+      idempotencyKey: randomUUID(),
+    },
+  });
+  expect(created.ok()).toBe(true);
+  const { id } = await created.json();
+  const overview = async () =>
+    (
+      await page.request.get(
+        `/api/financial-overview?month=${today.slice(0, 7)}&currency=ZAR`,
+      )
+    ).json();
+  expect((await overview()).outlook.variableSpent).toBe(20000);
+  await page.goto(`/transactions/${id}`);
+  await page.getByLabel("One-off purchase", { exact: true }).check();
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect
+    .poll(async () => (await overview()).outlook.variableSpent)
+    .toBe(0);
+  expect((await overview()).spending).toBe(20000);
+  await page.reload();
+  await expect(
+    page.getByLabel("One-off purchase", { exact: true }),
+  ).toBeChecked();
+  // Older clients that omit the flag preserve it when saving classifications.
+  expect(
+    (
+      await page.request.post(`/api/transactions/${id}`, {
+        headers,
+        data: {
+          kind: "expense",
+          allocations: [{ category_id: "groceries", amount: "200" }],
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+  expect((await page.request.get(`/api/transactions/${id}`)).ok()).toBe(true);
+  expect((await overview()).outlook.variableSpent).toBe(0);
+  await page.getByLabel("One-off purchase", { exact: true }).uncheck();
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect
+    .poll(async () => (await overview()).outlook.variableSpent)
+    .toBe(20000);
+});

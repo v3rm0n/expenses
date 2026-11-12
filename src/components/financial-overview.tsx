@@ -304,6 +304,15 @@ export function FinancialOverviewView({
           icon={<CalendarDays size={16} />}
         />
       </div>
+      {current && forecastActive && (
+        <p className="form-help">
+          Forecast: {fmt(data.spending)} spent + {fmt(data.pending.spending)}{" "}
+          pending + {fmt(outlook.unpaidTotal)} unpaid bills +{" "}
+          {fmt(outlook.variableRemaining)} remaining everyday spending.{" "}
+          {fmt(outlook.excludedFromPace)} of recorded spending is excluded from
+          daily pace.
+        </p>
+      )}
       {current && forecastActive && outlook.forecastRemaining !== null && (
         <div className={`notice ${overrun > 0 ? "planning-warning" : ""}`}>
           <p>
@@ -355,7 +364,7 @@ export function FinancialOverviewView({
                     <span>
                       <i style={{ background: row.color }} />
                       {row.name}
-                      {!row.flexible && <small> · committed</small>}
+                      {!row.flexible && <small> · counted once</small>}
                     </span>
                     <strong>{fmt(row.amount)}</strong>
                   </div>
@@ -568,9 +577,10 @@ export function FinancialOverviewView({
             ? `Oldest account sync: ${dateTime(syncs[0])}. ${stale ? "Some accounts are missing a recent sync. Refresh Connections before relying on estimates. " : ""}`
             : "Bank accounts have not been synced. "
           : "Based on manual entries. "}
-        Forecasts assume your recorded variable spending pace continues. Paid
-        bills are excluded from that pace. Missing bills, imports, or
-        classifications can change the result.{" "}
+        Forecasts extend everyday spending only. Fixed and occasional
+        categories, paid bills and payments marked One-off purchase are excluded
+        from daily pace. Category pace can be changed in Goals. Missing bills,
+        imports, or classifications can change the result.{" "}
         <TextLink onClick={() => ctx.navigate("/connections")}>
           Connections
         </TextLink>

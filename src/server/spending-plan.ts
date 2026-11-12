@@ -181,6 +181,7 @@ export async function financialOverview(
     pendingRows,
     comparisonRows,
     categoryRows,
+    oneOffRows,
   ] = await Promise.all([
     loadSpendingPlan(month, currency),
     overview(month, currency),
@@ -211,10 +212,21 @@ export async function financialOverview(
     query<PlanCategory>(
       "SELECT id,name,color,0::bigint AS amount FROM categories ORDER BY name",
     ),
+    query<{ category_id: string; amount: number }>(
+      `SELECT a.category_id,sum(a.amount)::bigint AS amount
+       FROM ledger_transactions t JOIN transactions original ON original.id=t.id
+       JOIN allocations a ON a.transaction_id=t.id
+       WHERE t.status='BOOK' AND t.kind IN ('expense','refund') AND t.currency=$1
+         AND t.booked_at >= $2 AND t.booked_at < $3 AND original.forecast_excluded
+       GROUP BY a.category_id`,
+      [currency, from, to],
+    ),
   ]);
   const categories = categoryRows.map((row) => ({
     ...row,
     amount: summary.categories.find((item) => item.id === row.id)?.amount ?? 0,
+    oneOffAmount:
+      oneOffRows.find((item) => item.category_id === row.id)?.amount ?? 0,
   }));
   const input = {
     month,

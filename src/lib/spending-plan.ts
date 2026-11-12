@@ -1,4 +1,5 @@
 import type { Contributions, MonthlyTotals } from "./spending-analysis";
+import { prorate } from "./money";
 
 export type SpendingPlan = {
   income: number | null;
@@ -83,11 +84,26 @@ export function goalProgress(
   };
 }
 
+// Unconfigured occasional categories are counted once, rather than assumed to
+// recur daily. A saved flexible budget explicitly overrides these defaults.
+export function projectsDailyPace(categoryId: string): boolean {
+  return [
+    "groceries",
+    "restaurants",
+    "transport",
+    "household",
+    "personal_care",
+    "alcohol",
+    "deposits",
+  ].includes(categoryId);
+}
+
 export type PlanCategory = {
   id: string;
   name: string;
   color: string;
   amount: number;
+  oneOffAmount?: number;
 };
 export type PlanningInputs = {
   month: string;
@@ -143,21 +159,35 @@ export function spendingOutlook(input: PlanningInputs) {
           }))
           .sort((a, b) => a.date.localeCompare(b.date));
   const unpaidTotal = unpaidBills.reduce((sum, bill) => sum + bill.amount, 0);
-  const fixedCategories = new Set(
-    plan.budgets.filter((row) => !row.flexible).map((row) => row.categoryId),
-  );
-  const fixedSpent = input.categories
-    .filter((row) => fixedCategories.has(row.id))
-    .reduce((sum, row) => sum + row.amount, 0);
-  const paidTotal = plan.bills
-    .filter(
-      (bill) =>
-        bill.status === "paid" &&
-        (!bill.categoryId || !fixedCategories.has(bill.categoryId)),
-    )
+  const paceCategories = input.categories.map((category) => {
+    const budget = plan.budgets.find((row) => row.categoryId === category.id);
+    const flexible = budget?.flexible ?? projectsDailyPace(category.id);
+    const paid = plan.bills
+      .filter(
+        (bill) => bill.status === "paid" && bill.categoryId === category.id,
+      )
+      .reduce((sum, bill) => sum + bill.amount, 0);
+    // Both are exclusions from repetition, not deductions from actual spending.
+    // Use the larger exclusion where a one-off payment is also a paid bill.
+    const oneOff = category.oneOffAmount ?? 0;
+    const excluded = oneOff + Math.max(0, paid - Math.max(0, oneOff));
+    return {
+      ...category,
+      flexible,
+      budget: budget?.amount ?? null,
+      pace: flexible ? Math.max(0, category.amount - excluded) : 0,
+    };
+  });
+  const unassignedPaid = plan.bills
+    .filter((bill) => bill.status === "paid" && !bill.categoryId)
     .reduce((sum, bill) => sum + bill.amount, 0);
-  // Paid bills are already in booked spending. Only variable spending is extrapolated.
-  const variableSpent = Math.max(0, input.spending - fixedSpent - paidTotal);
+  const variableSpent = Math.min(
+    Math.max(0, input.spending),
+    Math.max(
+      0,
+      paceCategories.reduce((sum, row) => sum + row.pace, 0) - unassignedPaid,
+    ),
+  );
   const variableRemaining =
     timing.status === "current" && timing.elapsed > 0
       ? Math.round((variableSpent / timing.elapsed) * timing.remainingDays)
@@ -214,34 +244,23 @@ export function spendingOutlook(input: PlanningInputs) {
         billsBeforePayday.reduce((sum, bill) => sum + bill.amount, 0) -
         plan.buffer
       : null;
-  const categories = input.categories
-    .map((category) => {
-      const budget = plan.budgets.find((row) => row.categoryId === category.id);
-      const paid = plan.bills
-        .filter(
-          (bill) => bill.status === "paid" && bill.categoryId === category.id,
-        )
-        .reduce((sum, bill) => sum + bill.amount, 0);
+  const remainingShares = prorate(
+    paceCategories.map((row) => row.pace),
+    variableRemaining,
+  );
+  const categories = paceCategories
+    .map(({ pace, ...category }, index) => {
       const unpaid = unpaidBills
         .filter((bill) => bill.categoryId === category.id)
         .reduce((sum, bill) => sum + bill.amount, 0);
-      const projected =
-        category.amount +
-        unpaid +
-        (timing.status === "current" &&
-        budget?.flexible !== false &&
-        timing.elapsed > 0
-          ? Math.round(
-              (Math.max(0, category.amount - paid) / timing.elapsed) *
-                timing.remainingDays,
-            )
-          : 0);
+      const projected = category.amount + unpaid + remainingShares[index];
       return {
         ...category,
-        budget: budget?.amount ?? null,
-        flexible: budget?.flexible ?? true,
         projected,
-        overrun: budget ? Math.max(0, projected - budget.amount) : 0,
+        overrun:
+          category.budget !== null
+            ? Math.max(0, projected - category.budget)
+            : 0,
       };
     })
     .sort(
@@ -266,6 +285,9 @@ export function spendingOutlook(input: PlanningInputs) {
         ? null
         : Math.floor(Math.max(0, allowance) / timing.remainingDays),
     forecastSpending,
+    variableSpent,
+    variableRemaining,
+    excludedFromPace: input.spending - variableSpent,
     forecastRemaining,
     forecastOverrun,
     surplus: input.income - input.spending,
