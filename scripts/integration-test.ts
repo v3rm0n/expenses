@@ -208,6 +208,98 @@ try {
     },
   );
   await check(
+    "imports learn consistent owner categories and receipt exemptions",
+    async () => {
+      const { setReceiptRequirements } =
+        await import("../src/server/receipt-requirements");
+      const [account] = await query(
+        "INSERT INTO accounts(identification_hash,name,currency,source) VALUES('history-learning','History learning','EUR','bank') RETURNING id",
+      );
+      const record = (
+        id: string,
+        merchant = "Test catering",
+        currency = "EUR",
+      ): BankTransaction => ({
+        entry_reference: id,
+        transaction_amount: { amount: "8.50", currency },
+        credit_debit_indicator: "DBIT",
+        booking_date: "2026-11-01",
+        status: "BOOK",
+        creditor: { name: merchant },
+        remittance_information: [`Changing reference ${id}`],
+      });
+      const get = async (id: string) =>
+        (
+          await query(
+            "SELECT t.*,a.category_id,a.source FROM transactions t JOIN allocations a ON a.transaction_id=t.id WHERE t.account_id=$1 AND source_reference=$2",
+            [account.id, id],
+          )
+        )[0];
+      try {
+        await importBankTransactions(account.id, [record("owner")]);
+        const owner = await get("owner");
+        await transaction(async (db) => {
+          await db.query("UPDATE transactions SET manual=true WHERE id=$1", [
+            owner.id,
+          ]);
+          await db.query(
+            "UPDATE allocations SET category_id='restaurants',source='manual' WHERE transaction_id=$1",
+            [owner.id],
+          );
+          await setReceiptRequirements([owner.id], true, db);
+        });
+        await importBankTransactions(account.id, [
+          record("next", " TEST Catering "),
+          record("different", "Other catering"),
+          record("currency", "Test catering", "USD"),
+        ]);
+        const next = await get("next");
+        assert.equal(next.category_id, "restaurants");
+        assert.equal(next.source, "merchant");
+        assert.equal(next.manual, false);
+        assert.equal(next.receipt_not_required, true);
+        assert.equal((await get("different")).category_id, "uncategorized");
+        assert.equal((await get("currency")).receipt_not_required, false);
+        await transaction((db) => setReceiptRequirements([next.id], false, db));
+        await importBankTransactions(account.id, [
+          record("next", " TEST Catering "),
+          record("conflict"),
+        ]);
+        assert.equal((await get("next")).receipt_not_required, false);
+        assert.equal((await get("conflict")).receipt_not_required, false);
+        // Conflicting owner categories disable inference; automatic results cannot vote.
+        await query("UPDATE transactions SET manual=true WHERE id=$1", [
+          next.id,
+        ]);
+        await query(
+          "UPDATE allocations SET category_id='gifts',source='manual' WHERE transaction_id=$1",
+          [next.id],
+        );
+        await importBankTransactions(account.id, [record("ambiguous")]);
+        assert.equal((await get("ambiguous")).category_id, "uncategorized");
+        // Explicit rules still take precedence over history.
+        const [rule] = await query(
+          "INSERT INTO rules(field,pattern,category_id) VALUES('merchant','Test catering','subscriptions') RETURNING id",
+        );
+        try {
+          await importBankTransactions(account.id, [record("explicit")]);
+          assert.equal((await get("explicit")).category_id, "subscriptions");
+        } finally {
+          await query("DELETE FROM rules WHERE id=$1", [rule.id]);
+        }
+      } finally {
+        await query(
+          "DELETE FROM corrections WHERE entity_id IN (SELECT id::text FROM transactions WHERE account_id=$1)",
+          [account.id],
+        );
+        await query("DELETE FROM transactions WHERE account_id=$1", [
+          account.id,
+        ]);
+        await query("DELETE FROM accounts WHERE id=$1", [account.id]);
+      }
+    },
+  );
+  await check(
     "saved similar categories apply to future bank imports with the same matching criteria",
     async () => {
       const { saveSimilarCategoryRule } =
@@ -2593,11 +2685,13 @@ KUUPÄEV: 02.10.2026`;
       );
       assert.equal(links[0].transaction_id, links[1].transaction_id);
       const allocations = await query(
-        "SELECT category_id,amount FROM allocations WHERE transaction_id=$1",
+        "SELECT category_id,amount FROM allocations WHERE transaction_id=$1 ORDER BY category_id",
         [links[0].transaction_id],
       );
       assert.deepEqual(allocations, [
-        { category_id: "restaurants", amount: 740 },
+        { category_id: "fees_taxes", amount: 90 },
+        { category_id: "restaurants", amount: 600 },
+        { category_id: "shipping", amount: 50 },
       ]);
       assert.equal((await receiveEmail(mime)).id, email.id);
       for (const id of message.receipt_ids) await processReceipt(id);
@@ -3183,7 +3277,7 @@ KUUPÄEV: 02.10.2026`;
         [encrypt({ id: "stale-pending-test" })],
       );
       const [wallet] = await query(
-        "INSERT INTO accounts(connection_id,identification_hash,provider_uid,name,currency,last_sync_at) VALUES($1,'stale-pending','stale-pending','Stale pending wallet','EUR',now()) RETURNING id",
+        "INSERT INTO accounts(connection_id,identification_hash,provider_uid,name,currency,last_sync_at) VALUES($1,'stale-pending','stale-pending','Stale pending wallet','EUR','2026-10-03') RETURNING id",
         [connection.id],
       );
       const pending = (merchant: string, amount = "10.00") => ({
@@ -3316,6 +3410,10 @@ KUUPÄEV: 02.10.2026`;
         );
         // An empty completed snapshot clears only the remaining unprotected
         // pending row inside the sync window.
+        await query(
+          "UPDATE accounts SET last_sync_at='2026-10-03' WHERE id=$1",
+          [wallet.id],
+        );
         globalThis.fetch = async () =>
           Response.json({ transactions: [], balances: [] });
         await syncBank(connection.id);

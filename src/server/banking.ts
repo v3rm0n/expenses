@@ -8,6 +8,7 @@ import type { Bank, BankTransaction } from "../lib/types";
 import { parseMoney, validDate } from "../lib/money";
 import { transactionKind, normalize } from "../lib/classification";
 import { applyAllocations, autoMatchReceipt, linkReceipt } from "./ledger";
+import { inheritReceiptRequirement } from "./merchant-history";
 import { enqueue } from "./queue";
 import { importStartDate, lockImportWindow } from "./import-window";
 
@@ -361,7 +362,13 @@ export async function importBankTransactions(
         }
       }
     } else await applyAllocations(entry.id, db);
-    if (entry.inserted) count++;
+    if (entry.inserted) {
+      await inheritReceiptRequirement(
+        { id: entry.id, merchant, kind, currency },
+        db,
+      );
+      count++;
+    }
   }
   for (const id of bookedIds) await settlePendingPayment(id, db);
   return count;

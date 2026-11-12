@@ -12,6 +12,7 @@ import { prorate } from "../lib/money";
 import type { Allocation, Rule } from "../lib/types";
 import { AppError } from "./errors";
 import { similarCategory } from "./similar-transactions";
+import { historicalMerchantCategory } from "./merchant-history";
 
 export async function applyAllocations(
   id: string,
@@ -132,11 +133,19 @@ export async function applyAllocations(
       const remainder = amount - allocated;
       if (remainder)
         allocations.push({
-          categoryId: merchantCategory(
-            entry.merchant,
-            entry.description,
-            entry.mcc,
-          ),
+          categoryId:
+            (links.length
+              ? undefined
+              : await historicalMerchantCategory(
+                  {
+                    id,
+                    merchant: entry.merchant,
+                    currency: entry.currency,
+                    kind,
+                  },
+                  db,
+                )) ??
+            merchantCategory(entry.merchant, entry.description, entry.mcc),
           amount: remainder,
           source: "merchant",
         });
