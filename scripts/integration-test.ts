@@ -4302,10 +4302,15 @@ KUUPÄEV: 02.10.2026`;
       const cashId = (await cash()).id;
       await transaction((db) => unlinkReceipt(receipt.id, cashId, db));
       assert.equal(await cash(), undefined);
+      // Deleting the receipt keeps a recorded cash payment as spending.
       await transaction((db) => recordCashPayment(receipt.id, db));
-      assert.ok(await cash());
+      const kept = (await cash()).id;
       await deleteReceipt(receipt.id);
-      assert.equal(await cash(), undefined);
+      assert.equal(
+        (await query("SELECT amount FROM transactions WHERE id=$1", [kept]))[0]
+          .amount,
+        -510,
+      );
     },
   );
   await check(

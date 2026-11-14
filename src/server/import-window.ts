@@ -69,7 +69,6 @@ export async function removeReceipts(ids: string[], db: DB) {
     "DELETE FROM corrections WHERE entity='receipt' AND entity_id=ANY($1::text[])",
     [receiptIds],
   );
-  await removeReceiptCashPayments(receiptIds, db);
   const removed = await query(
     "DELETE FROM receipts WHERE id=ANY($1::uuid[]) RETURNING id",
     [receiptIds],
@@ -134,9 +133,9 @@ export async function saveImportStartDate(date: string) {
     };
   });
 }
-// Cash payments recorded from a receipt belong to that receipt. Remove them
-// with it, or when they are unlinked, so they cannot count as spending
-// alongside a bank payment linked later.
+// A cash payment recorded from a receipt is removed when it is unlinked from
+// that receipt, so it cannot count as spending alongside a bank payment linked
+// later. Deleting the receipt keeps it, like any other recorded payment.
 export async function removeReceiptCashPayments(
   receiptIds: string[],
   db: DB,
