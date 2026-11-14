@@ -54,6 +54,7 @@ export async function storeReceipt(
   hint: Retailer = "unknown",
   source = "upload",
   order?: ReceiptOrderContext,
+  expectedTotal?: number,
 ) {
   if (!buffer.length || buffer.length > MAX_FILE_SIZE)
     throw new AppError("Each receipt must be between 1 byte and 15 MB.");
@@ -96,8 +97,8 @@ export async function storeReceipt(
   });
   await writeFile(storageFile(relative), buffer, { mode: 0o600 });
   const [receipt] = await query(
-    `INSERT INTO receipts(file_hash,filename,content_type,storage_path,retailer,source,order_id,order_total,order_currency,order_document_count)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(file_hash) DO UPDATE SET file_hash=excluded.file_hash RETURNING id`,
+    `INSERT INTO receipts(file_hash,filename,content_type,storage_path,retailer,source,order_id,order_total,order_currency,order_document_count,expected_total)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(file_hash) DO UPDATE SET file_hash=excluded.file_hash RETURNING id`,
     [
       hash,
       path
@@ -112,6 +113,7 @@ export async function storeReceipt(
       order?.total ?? null,
       order?.currency || null,
       order?.documentCount || null,
+      expectedTotal ?? null,
     ],
   );
   await enqueue("receipt-parse", { receiptId: receipt.id }, receipt.id);
@@ -310,6 +312,16 @@ export async function processReceipt(id: string) {
       parsed.valid = false;
       parsed.issues.push(
         "The receipt order ID or currency differs from its import. Review the documents.",
+      );
+    }
+    if (
+      receipt.expected_total !== null &&
+      receipt.expected_total !== undefined &&
+      parsed.total !== receipt.expected_total
+    ) {
+      parsed.valid = false;
+      parsed.issues.push(
+        "The receipt total differs from the retailer's purchase history. Review the receipt.",
       );
     }
     await transaction(async (db) => {

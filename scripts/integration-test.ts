@@ -4379,6 +4379,42 @@ KUUPÄEV: 02.10.2026`;
       await reclassify();
     },
   );
+  await check(
+    "retailer receipts that disagree with the purchase history wait in Review, and skipped ones are retried after an earlier start date",
+    async () => {
+      const receipt = await storeReceipt(
+        Buffer.from(receiptText("Rimi", "HISTORY-TOTAL-1")),
+        "history-total.txt",
+        "rimi",
+        "lidl",
+        undefined,
+        999,
+      );
+      await processReceipt(receipt.id);
+      const [row] = await query(
+        "SELECT status,issues FROM receipts WHERE id=$1",
+        [receipt.id],
+      );
+      assert.equal(row.status, "review");
+      assert.ok(
+        row.issues.some((issue: string) => issue.includes("purchase history")),
+      );
+      const start = await importStartDate();
+      await query(
+        "INSERT INTO retailer_receipts(retailer,account_key,external_id,receipt_id) VALUES('lidl','test-account','skipped-old',NULL)",
+      );
+      await saveImportStartDate("2025-12-01");
+      assert.equal(
+        (
+          await query(
+            "SELECT count(*)::int AS n FROM retailer_receipts WHERE external_id='skipped-old'",
+          )
+        )[0].n,
+        0,
+      );
+      await saveImportStartDate(start);
+    },
+  );
   console.log(`${checks} integration checks passed in isolated databases.`);
 } finally {
   await (await getQueue()).stop({ graceful: true });

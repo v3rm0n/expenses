@@ -88,6 +88,9 @@ export async function saveImportStartDate(date: string) {
       "INSERT INTO settings(key,value) VALUES('import_start_date',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now()",
       [JSON.stringify(start)],
     );
+    // Retailer receipts skipped for the previous start date are fetched again.
+    if (start < previous)
+      await db.query("DELETE FROM retailer_receipts WHERE receipt_id IS NULL");
     const olderReceipts = await query<{ id: string }>(
       "SELECT id FROM receipts WHERE purchased_at<$1",
       [start],

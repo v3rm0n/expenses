@@ -21,7 +21,7 @@ const item = (id: string) => ({
 
 describe("Lidl account imports", () => {
   it("decodes printed HTML, preserving receipt rows and exact reconciliation", () => {
-    const text = lidlReceiptText(detail("first"), "first", 2.93);
+    const text = lidlReceiptText(detail("first"), "first")!;
     expect(parseReceipt(text)).toMatchObject({
       valid: true,
       total: 293,
@@ -30,23 +30,59 @@ describe("Lidl account imports", () => {
     expect(text).not.toContain("<pre>");
     expect(text).toContain("Lõpphind");
   });
-  it("rejects a changed total, missing HTML, deleted receipt or mismatched identity", () => {
-    expect(() => lidlReceiptText(detail("first"), "first", 2.94)).toThrow(
-      "total",
-    );
-    expect(() => lidlReceiptText(detail("other"), "first", 2.93)).toThrow(
+  it("rejects missing HTML or a mismatched identity and skips deleted receipts", () => {
+    expect(() => lidlReceiptText(detail("other"), "first")).toThrow(
       "different",
     );
-    expect(() =>
+    expect(
       lidlReceiptText(
         { ticket: { ...detail("first").ticket, isDeleted: true } },
         "first",
-        2.93,
       ),
-    ).toThrow("unavailable");
+    ).toBeNull();
     expect(() =>
-      lidlReceiptText({ ticket: { id: "first" } }, "first", 2.93),
+      lidlReceiptText({ ticket: { id: "first" } }, "first"),
     ).toThrow();
+    expect(() =>
+      lidlReceiptText(
+        { ticket: { id: "first", isDeleted: false, htmlPrintedReceipt: "" } },
+        "first",
+      ),
+    ).toThrow("printed copy");
+  });
+  it("imports a receipt that disagrees with its history total instead of stopping", async () => {
+    const changed = detail("changed");
+    changed.ticket.htmlPrintedReceipt = html.replace("1,35 A", "1,36 A");
+    const saved: Array<[string, string | null, number]> = [];
+    const count = await importLidlHistory(
+      {
+        json: async (path) =>
+          path.includes("page=1")
+            ? {
+                page: 1,
+                size: 3,
+                totalCount: 3,
+                items: [item("changed"), item("deleted"), item("after")],
+              }
+            : path.includes("/changed?")
+              ? changed
+              : path.includes("/deleted?")
+                ? { ticket: { id: "deleted", isDeleted: true } }
+                : detail("after"),
+      },
+      async () => false,
+      async (id, text, total) => {
+        saved.push([id, text, total]);
+      },
+    );
+    expect(count).toBe(2);
+    expect(
+      saved.map(([id, text, total]) => [id, text !== null, total]),
+    ).toEqual([
+      ["changed", true, 293],
+      ["deleted", false, 293],
+      ["after", true, 293],
+    ]);
   });
   it("follows all pages, skips known and unavailable receipts, and retries partial imports without duplication", async () => {
     const saved = new Map<string, string>();
@@ -75,8 +111,8 @@ describe("Lidl account imports", () => {
       return detail(path.includes("/new?") ? "new" : "last");
     });
     const has = async (id: string) => saved.has(id);
-    const save = async (id: string, text: string) => {
-      saved.set(id, text);
+    const save = async (id: string, text: string | null) => {
+      saved.set(id, text ?? "");
     };
     await expect(importLidlHistory({ json }, has, save)).rejects.toThrow(
       "outage",
@@ -120,8 +156,6 @@ describe("Lidl account imports", () => {
   it("leaves an unreconciled basket for the existing review workflow", () => {
     const value = detail("review");
     value.ticket.htmlPrintedReceipt = html.replace("1,35 A", "1,34 A");
-    expect(parseReceipt(lidlReceiptText(value, "review", 2.93)).valid).toBe(
-      false,
-    );
+    expect(parseReceipt(lidlReceiptText(value, "review")!).valid).toBe(false);
   });
 });
