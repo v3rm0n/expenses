@@ -230,6 +230,12 @@ export function spendingOutlook(input: PlanningInputs) {
     incomeBasis === null
       ? null
       : incomeBasis - forecastSpending - reservedContributions - plan.buffer;
+  const allowanceDays =
+    timing.status === "current"
+      ? timing.remainingDays + 1
+      : timing.status === "future"
+        ? timing.days
+        : 0;
   const forecastOverrun =
     spendingLimit === null
       ? null
@@ -283,10 +289,13 @@ export function spendingOutlook(input: PlanningInputs) {
     incomeBasis,
     spendingLimit,
     allowance,
+    // Today's purchases are already recorded, so what remains can still be
+    // spent today as well as on the days after it.
+    allowanceDays,
     dailyAllowance:
-      allowance === null || timing.remainingDays === 0
+      allowance === null || allowanceDays === 0
         ? null
-        : Math.floor(Math.max(0, allowance) / timing.remainingDays),
+        : Math.floor(Math.max(0, allowance) / allowanceDays),
     forecastSpending,
     variableSpent,
     variableRemaining,

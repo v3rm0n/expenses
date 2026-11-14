@@ -321,6 +321,14 @@ describe("spending outlook", () => {
     expect(result.dailyAllowance).toBe(0);
     expect(result.forecastOverrun).toBe(124000);
   });
+  it("includes today in the daily allowance, so the last day still has one", () => {
+    const lastDay = spendingOutlook(input({ today: "2026-10-31" }));
+    expect(lastDay.allowanceDays).toBe(1);
+    expect(lastDay.dailyAllowance).toBe(lastDay.allowance);
+    const midMonth = spendingOutlook(input({ today: "2026-10-10" }));
+    expect(midMonth.allowanceDays).toBe(22);
+    expect(midMonth.dailyAllowance).toBe(Math.floor(midMonth.allowance! / 22));
+  });
   it("reserves all recorded bills when the previously entered payday has passed", () => {
     const base = input();
     const result = spendingOutlook(

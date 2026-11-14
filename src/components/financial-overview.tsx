@@ -228,9 +228,13 @@ export function FinancialOverviewView({
         {!past && outlook.dailyAllowance !== null && (
           <div className="allowance-pace">
             <strong>
-              {fmt(outlook.dailyAllowance * Math.min(7, outlook.remainingDays))}
+              {fmt(outlook.dailyAllowance * Math.min(7, outlook.allowanceDays))}
             </strong>
-            <span>for the next {Math.min(7, outlook.remainingDays)} days</span>
+            <span>
+              {outlook.allowanceDays === 1
+                ? "for today"
+                : `for the next ${Math.min(7, outlook.allowanceDays)} days, including today`}
+            </span>
             <small>{fmt(outlook.dailyAllowance)} per day</small>
           </div>
         )}
