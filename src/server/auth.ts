@@ -6,6 +6,7 @@ import {
   digest,
   equalSecret,
   hashPassword,
+  passwordNeedsRehash,
   secretToken,
   verifyPassword,
 } from "./crypto";
@@ -36,21 +37,39 @@ export function assertOrigin(request: NextRequest) {
   if (!origin || !allowed.includes(origin))
     throw new AppError("The request origin is not allowed.", 403);
 }
+// The trusted proxy appends the address it received the request from, so the
+// last entry is the one a client cannot choose. Earlier entries can be forged.
 export function clientIp(request: NextRequest) {
-  return config.trustProxy
-    ? request.headers.get("x-forwarded-for")?.split(",")[0].trim() || "local"
-    : "local";
+  if (!config.trustProxy) return "local";
+  const hops = (request.headers.get("x-forwarded-for") || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return hops.at(-1) || "local";
 }
-export async function limitLogin(request: NextRequest) {
-  const key = digest(`login:${clientIp(request)}`);
+const CLIENT_ATTEMPTS = 10,
+  TOTAL_ATTEMPTS = 50;
+const loginKey = (request: NextRequest) => digest(`login:${clientIp(request)}`);
+async function countAttempt(key: string) {
   const [attempt] = await query(
     `INSERT INTO auth_attempts(key,expires_at) VALUES($1,now()+interval '15 minutes')
     ON CONFLICT(key) DO UPDATE SET attempts=CASE WHEN auth_attempts.expires_at<now() THEN 1 ELSE auth_attempts.attempts+1 END,
     expires_at=CASE WHEN auth_attempts.expires_at<now() THEN now()+interval '15 minutes' ELSE auth_attempts.expires_at END RETURNING attempts`,
     [key],
   );
-  if (attempt.attempts > 10)
+  return attempt.attempts as number;
+}
+// Limits password and setup-token guesses per client, and in total so that
+// forged client addresses cannot buy unlimited guesses.
+export async function limitLogin(request: NextRequest) {
+  const client = await countAttempt(loginKey(request));
+  const total = await countAttempt(digest("login:all"));
+  if (client > CLIENT_ATTEMPTS || total > TOTAL_ATTEMPTS)
     throw new AppError("Too many attempts. Try again in 15 minutes.", 429);
+}
+// A successful sign-in clears its client's failed attempts.
+export async function clearLoginLimit(request: NextRequest) {
+  await query("DELETE FROM auth_attempts WHERE key=$1", [loginKey(request)]);
 }
 export async function createOwner(
   name: string,
@@ -80,6 +99,12 @@ export async function login(password: string) {
   const [owner] = await query("SELECT password_hash FROM owner WHERE id=1");
   if (!owner || !(await verifyPassword(password, owner.password_hash)))
     throw new AppError("Incorrect password.", 401);
+  // Upgrade hashes created with older work factors on the next sign-in.
+  if (passwordNeedsRehash(owner.password_hash))
+    await query(
+      "UPDATE owner SET password_hash=$1 WHERE id=1 AND password_hash=$2",
+      [await hashPassword(password), owner.password_hash],
+    );
 }
 export async function addSession(response: NextResponse, request: NextRequest) {
   const token = secretToken();

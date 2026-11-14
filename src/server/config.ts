@@ -39,6 +39,21 @@ export function assertConfig() {
   if (!config.databaseUrl) throw new Error("DATABASE_URL is required");
   if (!/^[a-f\d]{64}$/i.test(config.encryptionKey))
     throw new Error("ENCRYPTION_KEY must contain 64 hexadecimal characters");
-  if (config.setupToken.length < 24 || config.inboundToken.length < 24)
-    throw new Error("Configure random owner setup and inbound email tokens");
+  if (!randomToken(config.setupToken) || !randomToken(config.inboundToken))
+    throw new Error(
+      "Set OWNER_SETUP_TOKEN and INBOUND_EMAIL_TOKEN to independent random values of at least 24 characters, not the .env.example placeholders.",
+    );
+  if (config.setupToken === config.inboundToken)
+    throw new Error(
+      "OWNER_SETUP_TOKEN and INBOUND_EMAIL_TOKEN must be different random values.",
+    );
+}
+// Rejects short tokens, the .env.example placeholders, and obviously
+// repetitive values. Generated tokens pass easily.
+export function randomToken(value: string) {
+  return (
+    value.length >= 24 &&
+    !/replace|placeholder|change-?me/i.test(value) &&
+    new Set(value).size >= 10
+  );
 }

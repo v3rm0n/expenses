@@ -4529,6 +4529,49 @@ KUUPÄEV: 02.10.2026`;
       );
     },
   );
+  await check(
+    "sign-in limits cap forged client addresses, reset on success, and upgrade old password hashes",
+    async () => {
+      const { NextRequest } = await import("next/server");
+      const { limitLogin, clearLoginLimit, login } =
+        await import("../src/server/auth");
+      const { scryptSync } = await import("node:crypto");
+      const request = (address: string) =>
+        new NextRequest("http://127.0.0.1:4317/api/auth/login", {
+          headers: { "X-Forwarded-For": address },
+        });
+      const trust = config.trustProxy;
+      config.trustProxy = true;
+      try {
+        await query("DELETE FROM auth_attempts");
+        for (let i = 0; i < 10; i++) await limitLogin(request("192.0.2.1"));
+        await assert.rejects(limitLogin(request("192.0.2.1")), /Too many/);
+        await clearLoginLimit(request("192.0.2.1"));
+        await limitLogin(request("192.0.2.1"));
+        // Every request claims a new address; the total ceiling still applies.
+        for (let i = 0; i < 38; i++)
+          await limitLogin(request(`198.51.100.${i}`));
+        await assert.rejects(limitLogin(request("198.51.100.250")), /Too many/);
+      } finally {
+        config.trustProxy = trust;
+        await query("DELETE FROM auth_attempts");
+      }
+      const salt = "00112233445566778899aabbccddeeff";
+      await query(
+        "INSERT INTO owner(id,name,password_hash) VALUES(1,'Hash test',$1)",
+        [`${salt}:${scryptSync("legacy password", salt, 64).toString("hex")}`],
+      );
+      try {
+        await assert.rejects(login("not the password"), /Incorrect/);
+        await login("legacy password");
+        const [owner] = await query("SELECT password_hash FROM owner");
+        assert.match(owner.password_hash, /^scrypt\$131072\$8\$1\$/);
+        await login("legacy password");
+      } finally {
+        await query("DELETE FROM owner WHERE id=1");
+      }
+    },
+  );
   console.log(`${checks} integration checks passed in isolated databases.`);
 } finally {
   await (await getQueue()).stop({ graceful: true });

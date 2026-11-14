@@ -5,7 +5,7 @@ This bridge uses Cloudflare Email Routing, an Email Worker, and Workers KV. It a
 1. Finish the reverse proxy so `https://expenses.example.com/api/health` returns `{"ok":true}`.
 2. In Cloudflare’s dashboard, enable Email Routing for a dedicated **receipts.example.com** subdomain. Keep existing mail MX records on the root `example.com` domain. Follow the [subdomain configuration guide](https://developers.cloudflare.com/email-service/configuration/subdomains/).
 3. Sign in locally or over HTTPS, then open **Settings → Receipt email bridge → Reveal bridge token**. Copy it; this is independent of your bank credentials.
-4. From the repository root, copy the deployment template, set `APP_URL` in the local `wrangler.jsonc` to your public app origin, then create the KV namespace and replace `REPLACE_WITH_KV_NAMESPACE_ID` in `wrangler.jsonc` with the returned ID:
+4. From the repository root, copy the deployment template, set `APP_URL` in the local `wrangler.jsonc` to your public app origin, and set `ALLOWED_SENDERS` to the addresses that forward your receipts (see [Restrict senders](#restrict-senders)). Then create the KV namespace and replace `REPLACE_WITH_KV_NAMESPACE_ID` in `wrangler.jsonc` with the returned ID:
 
    ```sh
    cd integrations/cloudflare
@@ -30,6 +30,16 @@ The worker has no public HTTP email endpoint. It receives mail through the routi
 Inbound messages are limited to 20 MB, below KV’s per-value maximum. KV and Email Worker free quotas apply; this is intended for personal receipt volume. Monitor the pending `email:` keys and worker errors in Cloudflare while bringing the setup online. An unavailable receiver results in a retry log without logging message contents or the token. A full KV namespace or quota exhaustion can prevent buffering new mail. For a machine offline beyond seven days, increase retention or choose an always-on receiver.
 
 Email Routing is currently free for inbound mail; Workers/KV are limited by their free tiers. See [Email pricing](https://developers.cloudflare.com/email-service/platform/pricing/), [KV quotas](https://developers.cloudflare.com/kv/platform/pricing/), and the [Email handler API](https://developers.cloudflare.com/email-service/api/route-emails/email-handler/). This receives forwarded messages without operating an SMTP server or a mailbox API.
+
+## Restrict senders
+
+Anyone who learns the receipt address can otherwise send it mail, which fills Review, uses OCR time, and could add a receipt that matches one of your payments. Set `ALLOWED_SENDERS` in `wrangler.jsonc` to a comma-separated list of the envelope senders you forward from, then redeploy:
+
+- `you@gmail.com` also accepts `you+anything@gmail.com`, which Gmail uses when it forwards mail automatically.
+- `@yourdomain.com` accepts every address at that domain.
+- While setting up Gmail forwarding, temporarily add `forwarding-noreply@google.com` so the confirmation message arrives, and remove it afterwards.
+
+Other senders are rejected with a permanent SMTP error before anything is stored. Envelope senders can be forged, so this reduces unsolicited mail rather than authenticating it; keep the address private as well.
 
 For Gmail forwarding, first add the custom receipt address in Gmail’s forwarding settings. Its confirmation message is delivered through the same Worker. Open **Settings → Received email → Open message** in the app, copy the confirmation code or open the Gmail confirmation link, then finish the forwarding setup in Gmail. The app retains verification messages separately from receipts.
 

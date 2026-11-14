@@ -4,6 +4,9 @@
   "compatibility_date": "2026-10-02",
   "vars": {
     "APP_URL": "https://expenses.example.com",
+    // Comma-separated senders allowed to deliver receipts, for example
+    // "you@gmail.com,@yourdomain.com". Empty accepts every sender.
+    "ALLOWED_SENDERS": "",
   },
   "kv_namespaces": [
     {
