@@ -209,11 +209,12 @@ export async function completeBankAuthorization(
 }
 // Enable Banking also reports held, cancelled, rejected, and scheduled
 // entries. Holds are pending card authorizations; the others never moved money.
-export function bankStatus(raw: BankTransaction): "BOOK" | "PDNG" | null {
+// Other statuses, such as OTHR, are stored as reported and never counted.
+export function bankStatus(raw: BankTransaction): string | null {
   const status = raw.status || "BOOK";
   if (status === "PDNG" || status === "HOLD") return "PDNG";
   if (["CNCL", "RJCT", "SCHD"].includes(status)) return null;
-  return "BOOK";
+  return status;
 }
 // The stable identity of each record, numbering identical reference-less
 // records in the order the bank returned them.
@@ -314,7 +315,8 @@ export async function importBankTransactions(
       `INSERT INTO transactions(account_id,source_key,source_reference,fingerprint,amount,currency,kind,status,booked_at,value_at,merchant,description,counterparty_iban,mcc,raw)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
       ON CONFLICT(account_id,source_key) DO UPDATE SET amount=excluded.amount,currency=excluded.currency,
-      kind=CASE WHEN transactions.manual THEN transactions.kind ELSE excluded.kind END,status=excluded.status,
+      kind=CASE WHEN transactions.manual THEN transactions.kind ELSE excluded.kind END,
+      status=CASE WHEN transactions.settled_by IS NOT NULL THEN transactions.status ELSE excluded.status END,
       booked_at=excluded.booked_at,value_at=excluded.value_at,merchant=excluded.merchant,description=excluded.description,
       counterparty_iban=excluded.counterparty_iban,mcc=excluded.mcc,raw=excluded.raw,updated_at=now()
       RETURNING id,manual,(xmax=0) AS inserted,
@@ -549,8 +551,8 @@ async function settlePendingPayment(entryId: string, db: DB) {
         );
       }
       await db.query(
-        "UPDATE transactions SET status='SUPERSEDED' WHERE id=$1",
-        [predecessor.id],
+        "UPDATE transactions SET status='SUPERSEDED',settled_by=$2 WHERE id=$1",
+        [predecessor.id, entry.id],
       );
     }
   }
@@ -719,7 +721,7 @@ async function syncAccount(
     // purchases returned together on one page.
     const pagePendingCounts = new Map<string, number>();
     for (const record of data.transactions) {
-      if (record.status === "PDNG" && sebPendingSnapshot) {
+      if (bankStatus(record) === "PDNG" && sebPendingSnapshot) {
         const key = record.entry_reference
           ? `ref:${record.entry_reference}`
           : bankFingerprint(record);
@@ -754,20 +756,39 @@ async function syncAccount(
     // payments it no longer lists have booked under another identity or were
     // released. Retire these before settlement so obsolete copies cannot make
     // a protected pending receipt or manual correction appear ambiguous.
-    // Corrected, receipt-linked, and one-off pending payments stay until
-    // settlement or dismissal.
+    // Pending payments with owner input (corrections, receipt choices, receipt
+    // links, or the one-off flag) wait for settlement instead, until they are
+    // older than the retention period.
+    const listed = bankSourceKeys(records.filter((raw) => bankStatus(raw)));
     await tx.query(
       `UPDATE transactions t SET status='SUPERSEDED',updated_at=now() WHERE account_id=$1 AND status='PDNG'
         AND NOT (source_key=ANY($2::text[])) AND NOT manual AND NOT receipt_not_required AND NOT forecast_excluded
-        AND (booked_at IS NULL OR $3::date IS NULL OR booked_at >= $3::date OR booked_at < $3::date-$4::int)
-        AND NOT EXISTS(SELECT 1 FROM receipt_payments p WHERE p.transaction_id=t.id)`,
-      [
-        account.id,
-        bankSourceKeys(records.filter((raw) => bankStatus(raw))),
-        base.get("date_from"),
-        PENDING_RETENTION_DAYS,
-      ],
+        AND (booked_at IS NULL OR $3::date IS NULL OR booked_at >= $3::date)
+        AND NOT EXISTS(SELECT 1 FROM receipt_payments p WHERE p.transaction_id=t.id)
+        AND NOT EXISTS(SELECT 1 FROM corrections c WHERE c.entity='transaction' AND c.entity_id=t.id::text
+          AND jsonb_typeof(c.change->'receiptNotRequired')='boolean' AND NOT (c.change ? 'inheritedFromMerchant'))`,
+      [account.id, listed, base.get("date_from")],
     );
+    // Abandoned authorizations: pending payments the bank no longer lists,
+    // well before the sync window. Their receipts become free to match again.
+    const abandoned = await query<{ id: string }>(
+      `UPDATE transactions SET status='SUPERSEDED',updated_at=now() WHERE account_id=$1 AND status='PDNG'
+        AND NOT (source_key=ANY($2::text[])) AND booked_at < $3::date-$4::int RETURNING id`,
+      [account.id, listed, base.get("date_from"), PENDING_RETENTION_DAYS],
+      tx,
+    );
+    if (abandoned.length) {
+      const freed = await query<{ receipt_id: string }>(
+        "DELETE FROM receipt_payments WHERE transaction_id=ANY($1::uuid[]) RETURNING receipt_id",
+        [abandoned.map((row) => row.id)],
+        tx,
+      );
+      await tx.query(
+        `UPDATE receipts r SET status='ready' WHERE r.id=ANY($1::uuid[]) AND r.status='matched'
+          AND NOT EXISTS(SELECT 1 FROM receipt_payments p WHERE p.receipt_id=r.id)`,
+        [freed.map((row) => row.receipt_id)],
+      );
+    }
     count = await importBankTransactions(account.id, records, tx);
     const dates = records
       .map((t) => t.booking_date || t.transaction_date || t.value_date)

@@ -233,7 +233,7 @@ export function FinancialOverviewView({
             <span>
               {outlook.allowanceDays === 1
                 ? "for today"
-                : `for the next ${Math.min(7, outlook.allowanceDays)} days, including today`}
+                : `for the next ${Math.min(7, outlook.allowanceDays)} days${current ? ", including today" : ""}`}
             </span>
             <small>{fmt(outlook.dailyAllowance)} per day</small>
           </div>

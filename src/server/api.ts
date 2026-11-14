@@ -45,8 +45,7 @@ import {
   addSession,
   assertOrigin,
   createOwner,
-  limitLogin,
-  clearLoginLimit,
+  withLoginLimit,
   login,
   logout,
   requireOwner,
@@ -205,23 +204,21 @@ export async function handleApi(
     }
     if (method !== "GET") assertOrigin(request);
     if (route === "auth/setup" && method === "POST") {
-      await limitLogin(request);
       const input = z
         .object({ name: z.string(), password: z.string(), token: z.string() })
         .parse(await boundedJson(request));
-      await createOwner(input.name, input.password, input.token);
-      await clearLoginLimit(request);
+      await withLoginLimit(request, () =>
+        createOwner(input.name, input.password, input.token),
+      );
       const response = json({ ok: true });
       await addSession(response, request);
       return response;
     }
     if (route === "auth/login" && method === "POST") {
-      await limitLogin(request);
       const input = z
         .object({ password: z.string() })
         .parse(await boundedJson(request));
-      await login(input.password);
-      await clearLoginLimit(request);
+      await withLoginLimit(request, () => login(input.password));
       const response = json({ ok: true });
       await addSession(response, request);
       return response;
@@ -1017,6 +1014,11 @@ export async function handleApi(
           "UPDATE receipts SET status='processing',error=NULL WHERE id=$1",
           [id],
         );
+        // An explicit retry tries again even after repeated interruptions.
+        await query(
+          "UPDATE import_runs SET error='Processing was interrupted before a retry.' WHERE type='receipt' AND source_id=$1 AND error='Processing was interrupted.'",
+          [id],
+        );
         await enqueue("receipt-parse", { receiptId: id }, id);
         return json({ ok: true }, 202);
       }
@@ -1456,9 +1458,7 @@ export async function handleApi(
         })
         .parse(await request.json());
       // A stolen session must not allow unlimited password guesses.
-      await limitLogin(request);
-      await login(input.currentPassword);
-      await clearLoginLimit(request);
+      await withLoginLimit(request, () => login(input.currentPassword));
       await transaction(async (db) => {
         await db.query("UPDATE owner SET password_hash=$1 WHERE id=1", [
           await hashPassword(input.password),

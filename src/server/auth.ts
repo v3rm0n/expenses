@@ -59,17 +59,32 @@ async function countAttempt(key: string) {
   );
   return attempt.attempts as number;
 }
-// Limits password and setup-token guesses per client, and in total so that
-// forged client addresses cannot buy unlimited guesses.
-export async function limitLogin(request: NextRequest) {
+const failedKey = digest("login:failed");
+// Limits password and setup-token guesses per client. Failed guesses that a
+// client was allowed to make also count towards a shared total, so forged
+// client addresses cannot buy unlimited guesses, while one client alone
+// cannot fill the total and lock everyone out.
+export async function withLoginLimit<T>(
+  request: NextRequest,
+  attempt: () => Promise<T>,
+): Promise<T> {
   const client = await countAttempt(loginKey(request));
-  const total = await countAttempt(digest("login:all"));
-  if (client > CLIENT_ATTEMPTS || total > TOTAL_ATTEMPTS)
+  const [failed] = await query(
+    "SELECT attempts FROM auth_attempts WHERE key=$1 AND expires_at>now()",
+    [failedKey],
+  );
+  if (client > CLIENT_ATTEMPTS || (failed?.attempts || 0) >= TOTAL_ATTEMPTS)
     throw new AppError("Too many attempts. Try again in 15 minutes.", 429);
-}
-// A successful sign-in clears its client's failed attempts.
-export async function clearLoginLimit(request: NextRequest) {
-  await query("DELETE FROM auth_attempts WHERE key=$1", [loginKey(request)]);
+  try {
+    const result = await attempt();
+    // A successful sign-in clears its client's attempts.
+    await query("DELETE FROM auth_attempts WHERE key=$1", [loginKey(request)]);
+    return result;
+  } catch (error) {
+    if (error instanceof AppError && [401, 403].includes(error.status))
+      await countAttempt(failedKey);
+    throw error;
+  }
 }
 export async function createOwner(
   name: string,

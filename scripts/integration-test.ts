@@ -4183,9 +4183,10 @@ KUUPÄEV: 02.10.2026`;
         "UPDATE transactions SET note='Tuesday coffee' WHERE account_id=$1 AND fingerprint=$2",
         [wallet.id, bankFingerprint(tuesday)],
       );
-      // The overlapping sync returns Monday's booking again.
+      // The overlapping sync returns Monday's booking again, and the bank
+      // still lists Monday's settled pending copy.
       await transaction((db) =>
-        importBankTransactions(wallet.id, [booked, tuesday], db),
+        importBankTransactions(wallet.id, [booked, monday, tuesday], db),
       );
       const statuses = await query(
         "SELECT fingerprint,status,note FROM transactions WHERE account_id=$1 AND status<>'BOOK'",
@@ -4533,43 +4534,128 @@ KUUPÄEV: 02.10.2026`;
     "sign-in limits cap forged client addresses, reset on success, and upgrade old password hashes",
     async () => {
       const { NextRequest } = await import("next/server");
-      const { limitLogin, clearLoginLimit, login } =
-        await import("../src/server/auth");
+      const { withLoginLimit, login } = await import("../src/server/auth");
       const { scryptSync } = await import("node:crypto");
       const request = (address: string) =>
         new NextRequest("http://127.0.0.1:4317/api/auth/login", {
           headers: { "X-Forwarded-For": address },
         });
-      const trust = config.trustProxy;
-      config.trustProxy = true;
-      try {
-        await query("DELETE FROM auth_attempts");
-        for (let i = 0; i < 10; i++) await limitLogin(request("192.0.2.1"));
-        await assert.rejects(limitLogin(request("192.0.2.1")), /Too many/);
-        await clearLoginLimit(request("192.0.2.1"));
-        await limitLogin(request("192.0.2.1"));
-        // Every request claims a new address; the total ceiling still applies.
-        for (let i = 0; i < 38; i++)
-          await limitLogin(request(`198.51.100.${i}`));
-        await assert.rejects(limitLogin(request("198.51.100.250")), /Too many/);
-      } finally {
-        config.trustProxy = trust;
-        await query("DELETE FROM auth_attempts");
-      }
+      const attempt = (address: string, password: string) =>
+        withLoginLimit(request(address), () => login(password));
       const salt = "00112233445566778899aabbccddeeff";
       await query(
         "INSERT INTO owner(id,name,password_hash) VALUES(1,'Hash test',$1)",
         [`${salt}:${scryptSync("legacy password", salt, 64).toString("hex")}`],
       );
+      const trust = config.trustProxy;
+      config.trustProxy = true;
       try {
-        await assert.rejects(login("not the password"), /Incorrect/);
-        await login("legacy password");
+        await query("DELETE FROM auth_attempts");
+        for (let i = 0; i < 10; i++)
+          await assert.rejects(attempt("192.0.2.1", "wrong"), /Incorrect/);
+        // Rejected requests from a limited client do not fill the shared total.
+        for (let i = 0; i < 60; i++)
+          await assert.rejects(attempt("192.0.2.1", "wrong"), /Too many/);
+        // Forged addresses still run into the shared ceiling of failed guesses.
+        for (let i = 0; i < 40; i++)
+          await assert.rejects(
+            attempt(`198.51.100.${i}`, "wrong"),
+            /Incorrect/,
+          );
+        await assert.rejects(
+          attempt("198.51.100.250", "legacy password"),
+          /Too many/,
+        );
+        await query("DELETE FROM auth_attempts WHERE key=$1", [
+          digest("login:failed"),
+        ]);
+        await assert.rejects(attempt("203.0.113.5", "wrong"), /Incorrect/);
+        await attempt("203.0.113.5", "legacy password");
+        assert.equal(
+          (
+            await query("SELECT 1 FROM auth_attempts WHERE key=$1", [
+              digest("login:203.0.113.5"),
+            ])
+          ).length,
+          0,
+        );
         const [owner] = await query("SELECT password_hash FROM owner");
         assert.match(owner.password_hash, /^scrypt\$131072\$8\$1\$/);
         await login("legacy password");
       } finally {
+        config.trustProxy = trust;
+        await query("DELETE FROM auth_attempts");
         await query("DELETE FROM owner WHERE id=1");
       }
+    },
+  );
+  await check(
+    "an explicit receipt choice survives a sync where the bank stops listing the pending payment",
+    async () => {
+      const { setReceiptRequirements } =
+        await import("../src/server/receipt-requirements");
+      const [connection] = await query(
+        "INSERT INTO bank_connections(bank_name,country,session_cipher,valid_until) VALUES('Swedbank','EE',$1,now()+interval '30 days') RETURNING id",
+        [encrypt({ id: "receipt-choice-sync" })],
+      );
+      const [wallet] = await query(
+        "INSERT INTO accounts(connection_id,identification_hash,provider_uid,name,currency,last_sync_at) VALUES($1,'ride-wallet','ride-wallet','Ride wallet','EUR','2026-10-12') RETURNING id",
+        [connection.id],
+      );
+      await transaction((db) =>
+        importBankTransactions(
+          wallet.id,
+          [
+            {
+              ...bank("ride-history", "6.00", "TEST RIDES"),
+              booking_date: "2026-09-25",
+            },
+          ],
+          db,
+        ),
+      );
+      const [history] = await query(
+        "SELECT id FROM transactions WHERE source_key='ref:ride-history'",
+      );
+      await transaction((db) => setReceiptRequirements([history.id], true, db));
+      const pending = pendingBank("TEST RIDES", "4.50", "2026-10-13");
+      await transaction((db) =>
+        importBankTransactions(wallet.id, [pending], db),
+      );
+      const [row] = await query(
+        "SELECT id FROM transactions WHERE account_id=$1 AND fingerprint=$2",
+        [wallet.id, bankFingerprint(pending)],
+      );
+      await transaction((db) => setReceiptRequirements([row.id], false, db));
+      const original = globalThis.fetch;
+      try {
+        globalThis.fetch = async (input) =>
+          Response.json(
+            new URL(String(input)).pathname.endsWith("/balances")
+              ? { balances: [] }
+              : {
+                  transactions: [
+                    {
+                      ...bank("ride-booked", "4.50", "TEST RIDES"),
+                      booking_date: "2026-10-14",
+                    },
+                  ],
+                },
+          );
+        await syncBank(connection.id);
+      } finally {
+        globalThis.fetch = original;
+      }
+      const [booked] = await query(
+        "SELECT receipt_not_required FROM transactions WHERE source_key='ref:ride-booked'",
+      );
+      assert.equal(booked.receipt_not_required, false);
+      assert.equal(
+        (
+          await query("SELECT status FROM transactions WHERE id=$1", [row.id])
+        )[0].status,
+        "SUPERSEDED",
+      );
     },
   );
   console.log(`${checks} integration checks passed in isolated databases.`);
