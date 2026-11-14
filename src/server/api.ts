@@ -75,6 +75,7 @@ import {
   MAX_FILE_SIZE,
   deleteReceipt,
   replaceReceiptItems,
+  applyRulesToHistory,
   storageFile,
   storeReceipt,
 } from "./receipts";
@@ -97,7 +98,6 @@ import {
   contributionCategory,
   allocationAmount,
   normalize,
-  productCategory,
 } from "../lib/classification";
 import type { Allocation, Retailer, Rule } from "../lib/types";
 import {
@@ -1556,33 +1556,6 @@ export async function handleApi(
       error instanceof AppError ? error.status : 500,
     );
   }
-}
-async function applyRulesToHistory() {
-  return transaction(async (db) => {
-    const rules = await query<Rule>(
-      "SELECT * FROM rules WHERE enabled ORDER BY priority",
-      [],
-      db,
-    );
-    const items = await query(
-      "SELECT i.*,r.merchant FROM receipt_items i JOIN receipts r ON r.id=i.receipt_id WHERE NOT i.manual",
-      [],
-      db,
-    );
-    for (const item of items) {
-      const rule = matchingRule(
-        rules.filter((rule) => rule.field === "product"),
-        item.merchant || "",
-        "",
-        item.description,
-      );
-      await db.query("UPDATE receipt_items SET category_id=$2 WHERE id=$1", [
-        item.id,
-        rule?.category_id || productCategory(item.description),
-      ]);
-    }
-    return reclassify(db);
-  });
 }
 function documentResponse(
   buffer: Buffer,

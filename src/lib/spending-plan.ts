@@ -181,11 +181,14 @@ export function spendingOutlook(input: PlanningInputs) {
   const unassignedPaid = plan.bills
     .filter((bill) => bill.status === "paid" && !bill.categoryId)
     .reduce((sum, bill) => sum + bill.amount, 0);
-  const variableSpent = Math.min(
-    Math.max(0, input.spending),
-    Math.max(
-      0,
-      paceCategories.reduce((sum, row) => sum + row.pace, 0) - unassignedPaid,
+  // A paid bill without a category is already in booked spending, but its
+  // category is unknown. Remove it from total spending rather than from the
+  // daily-pace categories, so rent booked in Housing cannot cancel groceries.
+  const variableSpent = Math.max(
+    0,
+    Math.min(
+      paceCategories.reduce((sum, row) => sum + row.pace, 0),
+      input.spending - unassignedPaid,
     ),
   );
   const variableRemaining =

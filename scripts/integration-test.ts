@@ -3960,6 +3960,101 @@ KUUPÄEV: 02.10.2026`;
       );
     },
   );
+  // Regression checks for review fixes.
+  await check(
+    "product rule changes keep parser categories and can be undone",
+    async () => {
+      const { applyRulesToHistory } = await import("../src/server/receipts");
+      const id = "0f1e2d3c4b5a69788796a5b4";
+      const receipt = await storeReceipt(
+        textPdf(woltReceiptText(false, id)),
+        "rule-history-wolt.pdf",
+        "wolt",
+        "email",
+        { orderId: id, total: 600, currency: "EUR" },
+      );
+      await processReceipt(receipt.id);
+      const categories = async () =>
+        Object.fromEntries(
+          (
+            await query(
+              "SELECT description,category_id FROM receipt_items WHERE receipt_id=$1 ORDER BY position",
+              [receipt.id],
+            )
+          ).map((row) => [row.description, row.category_id]),
+        );
+      const parsed = await categories();
+      assert.equal(parsed["Burger with fries"], "restaurants");
+      assert.equal(parsed.Lemonade, "restaurants");
+      const [rule] = await query(
+        "INSERT INTO rules(field,pattern,category_id) VALUES('product','Lemonade','groceries') RETURNING id",
+      );
+      await applyRulesToHistory();
+      assert.deepEqual(await categories(), {
+        ...parsed,
+        Lemonade: "groceries",
+      });
+      await query("DELETE FROM rules WHERE id=$1", [rule.id]);
+      await applyRulesToHistory();
+      assert.deepEqual(await categories(), parsed);
+    },
+  );
+  await check(
+    "corrupt images and repeatedly interrupted documents land in Review",
+    async () => {
+      const { imageDimensions } = await import("../src/server/receipts");
+      const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+      const corrupt = await storeReceipt(
+        Buffer.concat([signature, Buffer.from("not really an image")]),
+        "corrupt.png",
+      );
+      await assert.rejects(processReceipt(corrupt.id));
+      assert.equal(
+        (
+          await query("SELECT status FROM receipts WHERE id=$1", [corrupt.id])
+        )[0].status,
+        "review",
+      );
+      // A PNG header claiming 100k x 100k pixels is rejected before decoding.
+      const header = Buffer.alloc(33);
+      signature.copy(header);
+      header.writeUInt32BE(13, 8);
+      header.write("IHDR", 12);
+      header.writeUInt32BE(100000, 16);
+      header.writeUInt32BE(100000, 20);
+      assert.deepEqual(imageDimensions(header), {
+        width: 100000,
+        height: 100000,
+      });
+      const huge = await storeReceipt(header, "huge.png");
+      await assert.rejects(processReceipt(huge.id), /too large/);
+      const stuck = await storeReceipt(
+        Buffer.from(receiptText("Rimi", "STUCK-1")),
+        "stuck.txt",
+      );
+      for (let i = 0; i < 3; i++)
+        await query(
+          "INSERT INTO import_runs(type,source_id) VALUES('receipt',$1)",
+          [stuck.id],
+        );
+      // Each restart closes the run that never finished.
+      await query(
+        "UPDATE import_runs SET status='error',error='Processing was interrupted.',finished_at=now() WHERE source_id=$1 AND status='running'",
+        [stuck.id],
+      );
+      await query(
+        "INSERT INTO import_runs(type,source_id) VALUES('receipt',$1)",
+        [stuck.id],
+      );
+      await processReceipt(stuck.id);
+      const [row] = await query(
+        "SELECT status,error FROM receipts WHERE id=$1",
+        [stuck.id],
+      );
+      assert.equal(row.status, "review");
+      assert.match(row.error, /stopped repeatedly/);
+    },
+  );
   console.log(`${checks} integration checks passed in isolated databases.`);
 } finally {
   await (await getQueue()).stop({ graceful: true });

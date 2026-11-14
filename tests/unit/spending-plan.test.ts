@@ -155,6 +155,45 @@ describe("spending outlook", () => {
       50000,
     );
   });
+  it("does not let a paid bill without a category cancel everyday spending", () => {
+    const rent = {
+      id: "rent",
+      name: "Rent",
+      amount: 80000,
+      dueDay: 1,
+      status: "paid" as const,
+      categoryId: null,
+    };
+    const result = spendingOutlook(
+      input({
+        month: "2026-11",
+        today: "2026-11-12",
+        plan: { ...emptyPlan(), bills: [rent] },
+        spending: 120000,
+        categories: [
+          { id: "housing", name: "Housing", color: "", amount: 80000 },
+          { id: "groceries", name: "Groceries", color: "", amount: 30000 },
+          { id: "restaurants", name: "Restaurants", color: "", amount: 10000 },
+        ],
+      }),
+    );
+    expect(result.variableSpent).toBe(40000);
+    expect(result.variableRemaining).toBe(60000);
+    // The same uncategorized bill booked in a daily-pace category is excluded.
+    const inGroceries = spendingOutlook(
+      input({
+        month: "2026-11",
+        today: "2026-11-12",
+        plan: { ...emptyPlan(), bills: [{ ...rent, amount: 10000 }] },
+        spending: 60000,
+        categories: [
+          { id: "groceries", name: "Groceries", color: "", amount: 50000 },
+          { id: "restaurants", name: "Restaurants", color: "", amount: 10000 },
+        ],
+      }),
+    );
+    expect(inGroceries.variableSpent).toBe(50000);
+  });
   it("does not repeat one-off purchases even when a category explicitly uses daily pace", () => {
     const base = input();
     const result = spendingOutlook(

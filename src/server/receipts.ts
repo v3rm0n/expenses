@@ -9,7 +9,7 @@ import { parseReceipt } from "../lib/receipt-parser";
 import { normalize, matchingRule } from "../lib/classification";
 import type { Retailer, Rule } from "../lib/types";
 import { enqueue } from "./queue";
-import { applyAllocations, autoMatchReceipt } from "./ledger";
+import { applyAllocations, autoMatchReceipt, reclassify } from "./ledger";
 import {
   recategorizeWoltDiscounts,
   type ReceiptOrderContext,
@@ -128,11 +128,59 @@ export async function deleteReceipt(id: string) {
   });
 }
 
+const MAX_IMAGE_PIXELS = 50_000_000;
+// Reads PNG and JPEG dimensions from their headers, without decoding pixels.
+export function imageDimensions(buffer: Buffer) {
+  if (buffer.length >= 24 && buffer.subarray(12, 16).toString() === "IHDR")
+    return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+  if (buffer[0] === 0xff && buffer[1] === 0xd8) {
+    let offset = 2;
+    while (offset + 9 < buffer.length) {
+      if (buffer[offset] !== 0xff) return null;
+      const marker = buffer[offset + 1];
+      if (marker === 0xff) {
+        offset++;
+        continue;
+      }
+      if (
+        marker === 0xd8 ||
+        marker === 0x01 ||
+        (marker >= 0xd0 && marker <= 0xd7)
+      ) {
+        offset += 2;
+        continue;
+      }
+      if (
+        marker >= 0xc0 &&
+        marker <= 0xcf &&
+        ![0xc4, 0xc8, 0xcc].includes(marker)
+      )
+        return {
+          height: buffer.readUInt16BE(offset + 5),
+          width: buffer.readUInt16BE(offset + 7),
+        };
+      offset += 2 + buffer.readUInt16BE(offset + 2);
+    }
+  }
+  return null;
+}
 async function recognizeImage(buffer: Buffer): Promise<string> {
+  const size = imageDimensions(buffer);
+  if (!size || !size.width || !size.height)
+    throw new AppError(
+      "The image could not be read. Upload another copy or enter the receipt details manually.",
+    );
+  if (size.width * size.height > MAX_IMAGE_PIXELS)
+    throw new AppError("This image is too large to process.");
   const { createWorker } = await import("tesseract.js");
   const cachePath = path.join(config.dataDir, "ocr");
   await mkdir(cachePath, { recursive: true, mode: 0o700 });
-  const worker = await createWorker(["eng", "est"], undefined, { cachePath });
+  // Without an error handler, tesseract.js also throws a failed job from its
+  // message listener, which no caller can catch and which stops the worker.
+  const worker = await createWorker(["eng", "est"], undefined, {
+    cachePath,
+    errorHandler: () => undefined,
+  });
   try {
     const { data } = await worker.recognize(buffer);
     return data.text;
@@ -208,9 +256,32 @@ export async function extractDocument(
     await loadingTask.destroy();
   }
 }
+const MAX_INTERRUPTED_ATTEMPTS = 3;
 export async function processReceipt(id: string) {
   const [receipt] = await query("SELECT * FROM receipts WHERE id=$1", [id]);
   if (!receipt || receipt.manual || receipt.duplicate_of) return;
+  // A document that repeatedly stops the worker before an error is recorded
+  // must leave the retry loop and wait in Review.
+  const interruption = "Processing was interrupted.";
+  await query(
+    "UPDATE import_runs SET status='error',error=$2,finished_at=now() WHERE type='receipt' AND source_id=$1 AND status='running'",
+    [id, interruption],
+  );
+  const [interrupted] = await query(
+    `SELECT count(*)::int AS n FROM import_runs WHERE type='receipt' AND source_id=$1 AND error=$2
+      AND started_at>coalesce((SELECT max(started_at) FROM import_runs WHERE type='receipt' AND source_id=$1 AND status='complete'),'-infinity')`,
+    [id, interruption],
+  );
+  if (interrupted.n >= MAX_INTERRUPTED_ATTEMPTS) {
+    await query(
+      "UPDATE receipts SET status='review',error=$2,updated_at=now() WHERE id=$1",
+      [
+        id,
+        "Processing this document stopped repeatedly. Upload another copy or enter the receipt details manually.",
+      ],
+    );
+    return;
+  }
   const [run] = await query(
     "INSERT INTO import_runs(type,source_id) VALUES('receipt',$1) RETURNING id",
     [id],
@@ -334,6 +405,7 @@ export async function processReceipt(id: string) {
           "",
           item.description,
         );
+        item.parsedCategoryId = item.categoryId;
         item.categoryId =
           previous?.category_id ||
           mapping?.category_id ||
@@ -367,7 +439,11 @@ export async function processReceipt(id: string) {
       );
       await replaceReceiptItems(
         id,
-        parsed.items.map((item) => ({ ...item, category_id: item.categoryId })),
+        parsed.items.map((item) => ({
+          ...item,
+          category_id: item.categoryId,
+          parsed_category_id: item.parsedCategoryId ?? item.categoryId,
+        })),
         db,
       );
       for (const link of await query(
@@ -421,6 +497,7 @@ export async function replaceReceiptItems(
     unit?: string | null;
     amount: number;
     category_id: string;
+    parsed_category_id?: string | null;
     manual?: boolean;
   }>,
   db: DB,
@@ -429,7 +506,7 @@ export async function replaceReceiptItems(
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     await db.query(
-      "INSERT INTO receipt_items(receipt_id,position,description,quantity,unit,amount,category_id,manual) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+      "INSERT INTO receipt_items(receipt_id,position,description,quantity,unit,amount,category_id,manual,parsed_category_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
       [
         id,
         i,
@@ -439,7 +516,58 @@ export async function replaceReceiptItems(
         item.amount,
         item.category_id,
         Boolean(item.manual),
+        item.parsed_category_id || null,
       ],
     );
   }
+}
+// Re-applies product rules to automatic receipt items, then reclassifies.
+export async function applyRulesToHistory() {
+  return transaction(async (db) => {
+    const rules = await query<Rule>(
+      "SELECT * FROM rules WHERE enabled AND field='product' ORDER BY priority",
+      [],
+      db,
+    );
+    const items = await query(
+      "SELECT i.*,r.merchant,r.retailer FROM receipt_items i JOIN receipts r ON r.id=i.receipt_id ORDER BY i.receipt_id,i.position",
+      [],
+      db,
+    );
+    let receiptId: string | undefined, previousCategory: string | undefined;
+    for (const item of items) {
+      if (item.receipt_id !== receiptId) {
+        receiptId = item.receipt_id;
+        previousCategory = undefined;
+      }
+      let category = item.category_id;
+      if (!item.manual) {
+        const rule = matchingRule(
+          rules,
+          item.merchant || "",
+          "",
+          item.description,
+        );
+        // Without a matching rule, restore the parser's category. Older rows
+        // without one keep their current category.
+        category =
+          rule?.category_id || item.parsed_category_id || item.category_id;
+        if (
+          !rule &&
+          item.retailer === "wolt" &&
+          /^Discount$/i.test(item.description) &&
+          item.amount < 0 &&
+          previousCategory
+        )
+          category = previousCategory;
+        if (category !== item.category_id)
+          await db.query(
+            "UPDATE receipt_items SET category_id=$2 WHERE id=$1",
+            [item.id, category],
+          );
+      }
+      if (item.amount > 0) previousCategory = category;
+    }
+    return reclassify(db);
+  });
 }
