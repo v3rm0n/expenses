@@ -4470,6 +4470,65 @@ KUUPÄEV: 02.10.2026`;
       assert.equal(groceries.categoryTotal, 300);
     },
   );
+  await check(
+    "receipts paid in cash do not auto-match a card payment",
+    async () => {
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [
+            {
+              ...bank("cash-tender-card", "5.10", "Rimi"),
+              booking_date: "2026-10-12",
+            },
+          ],
+          db,
+        ),
+      );
+      const receipt = await storeReceipt(
+        Buffer.from(
+          receiptText("Rimi", "CASH-TENDER-1", "12.10.2026").replace(
+            "Pangakaart 5,10",
+            "Sularaha 5,10",
+          ),
+        ),
+        "cash-tender.txt",
+      );
+      await processReceipt(receipt.id);
+      assert.deepEqual(
+        (
+          await query(
+            "SELECT status,cash_amount,card_amount FROM receipts WHERE id=$1",
+            [receipt.id],
+          )
+        )[0],
+        { status: "ready", cash_amount: 510, card_amount: null },
+      );
+      assert.equal(
+        (
+          await query(
+            "SELECT count(*)::int AS n FROM receipt_payments WHERE receipt_id=$1",
+            [receipt.id],
+          )
+        )[0].n,
+        0,
+      );
+      await query(
+        "UPDATE receipts SET cash_amount=NULL,card_amount=510 WHERE id=$1",
+        [receipt.id],
+      );
+      await transaction((db) => autoMatchReceipt(receipt.id, db));
+      assert.equal(
+        (
+          await query(
+            "SELECT count(*)::int AS n FROM receipt_payments WHERE receipt_id=$1",
+            [receipt.id],
+          )
+        )[0].n,
+        1,
+      );
+    },
+  );
   console.log(`${checks} integration checks passed in isolated databases.`);
 } finally {
   await (await getQueue()).stop({ graceful: true });

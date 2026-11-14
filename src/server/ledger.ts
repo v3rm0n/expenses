@@ -229,6 +229,13 @@ export async function autoMatchReceipt(receiptId: string, db: DB = pool) {
     ).length
   )
     return;
+  // A receipt paid wholly or partly in cash cannot be the card payment for
+  // its full total; leave it for an explicit cash entry or manual link.
+  if (
+    Math.abs(receipt.cash_amount || 0) > 0 &&
+    Math.abs(receipt.card_amount || 0) < Math.abs(receipt.total)
+  )
+    return;
   const merchant =
     receipt.retailer === "partnerkaart"
       ? receipt.merchant?.split(" ")[0]
