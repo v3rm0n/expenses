@@ -4415,6 +4415,61 @@ KUUPÄEV: 02.10.2026`;
       await saveImportStartDate(start);
     },
   );
+  await check(
+    "filtered transaction totals count booked payments and a category's share of splits",
+    async () => {
+      const { transactionList } = await import("../src/server/reporting");
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [
+            {
+              ...bank("split-total", "5.10", "TEST SPLIT SHOP"),
+              booking_date: "2026-10-07",
+            },
+            pendingBank("TEST SPLIT SHOP", "9.00", "2026-10-08"),
+          ],
+          db,
+        ),
+      );
+      const [split] = await query(
+        "SELECT id FROM transactions WHERE source_key='ref:split-total'",
+      );
+      await transaction(async (db) => {
+        await db.query("UPDATE transactions SET manual=true WHERE id=$1", [
+          split.id,
+        ]);
+        await db.query("DELETE FROM allocations WHERE transaction_id=$1", [
+          split.id,
+        ]);
+        await db.query(
+          "INSERT INTO allocations(transaction_id,category_id,amount,source) VALUES($1,'groceries',300,'manual'),($1,'household',210,'manual')",
+          [split.id],
+        );
+      });
+      const list = await transactionList(
+        new URLSearchParams({
+          currency: "EUR",
+          from: "2026-10-01",
+          to: "2026-10-31",
+          search: "TEST SPLIT SHOP",
+        }),
+      );
+      assert.equal(list.count, 2);
+      assert.equal(list.bookedTotal, -510);
+      assert.equal(list.categoryTotal, null);
+      const groceries = await transactionList(
+        new URLSearchParams({
+          currency: "EUR",
+          from: "2026-10-01",
+          to: "2026-10-31",
+          search: "TEST SPLIT SHOP",
+          category: "groceries",
+        }),
+      );
+      assert.equal(groceries.categoryTotal, 300);
+    },
+  );
   console.log(`${checks} integration checks passed in isolated databases.`);
 } finally {
   await (await getQueue()).stop({ graceful: true });

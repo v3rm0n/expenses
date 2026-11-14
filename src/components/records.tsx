@@ -90,7 +90,12 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
     rows: Entry[];
     count: number;
     limit: number;
+    bookedTotal: number;
+    categoryTotal: number | null;
   }>(`transactions?${params}`, ctx.revision, 30000);
+  const categoryName = ctx.state.categories.find(
+    (row) => row.id === category,
+  )?.name;
   const [selected, setSelected] = useState<string[]>([]);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
@@ -461,6 +466,10 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
               {data.count
                 ? `${(page - 1) * data.limit + 1}–${Math.min(page * data.limit, data.count)} of ${data.count}`
                 : "0 transactions"}
+              {data.count > 0 &&
+                (data.categoryTotal !== null && category
+                  ? ` · ${formatMoney(data.categoryTotal, ctx.currency)} booked in ${categoryName || "this category"}`
+                  : ` · Net ${formatMoney(data.bookedTotal, ctx.currency)} booked`)}
             </span>
             <div>
               <button

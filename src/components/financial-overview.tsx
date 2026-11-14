@@ -357,7 +357,9 @@ export function FinancialOverviewView({
                 <button
                   key={row.id}
                   onClick={() =>
-                    ctx.navigate(`/transactions?category=${row.id}&${query}`)
+                    ctx.navigate(
+                      `/transactions?category=${row.id}&status=BOOK&${query}`,
+                    )
                   }
                 >
                   <div className="planning-category-heading">
