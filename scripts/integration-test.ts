@@ -3331,6 +3331,10 @@ KUUPÄEV: 02.10.2026`;
         linked = pending("TEST LINKED PENDING", "5.10"),
         historical = {
           ...pending("TEST OLDER PENDING", "1.23"),
+          booking_date: "2026-09-01",
+        },
+        abandoned = {
+          ...pending("TEST ABANDONED PENDING", "2.34"),
           booking_date: "2026-01-02",
         },
         booked = {
@@ -3346,6 +3350,7 @@ KUUPÄEV: 02.10.2026`;
             manual,
             linked,
             historical,
+            abandoned,
           ],
           db,
         ),
@@ -3386,7 +3391,7 @@ KUUPÄEV: 02.10.2026`;
               [wallet.id],
             )
           )[0].n,
-          11,
+          12,
         );
         assert.equal(
           (
@@ -3414,6 +3419,17 @@ KUUPÄEV: 02.10.2026`;
             )
           )[0].n,
           5,
+        );
+        // Pending payments well before the sync window that the bank no
+        // longer lists are abandoned authorizations.
+        assert.equal(
+          (
+            await query(
+              "SELECT status FROM transactions WHERE account_id=$1 AND fingerprint=$2",
+              [wallet.id, bankFingerprint(abandoned)],
+            )
+          )[0].status,
+          "SUPERSEDED",
         );
         assert.equal(
           (
@@ -4053,6 +4069,187 @@ KUUPÄEV: 02.10.2026`;
       );
       assert.equal(row.status, "review");
       assert.match(row.error, /stopped repeatedly/);
+    },
+  );
+  const pendingBank = (merchant: string, amount: string, date: string) => ({
+    ...bank(undefined, amount, merchant),
+    status: "PDNG",
+    booking_date: date,
+    creditor: {},
+    debtor: {},
+    remittance_information: [merchant],
+  });
+  await check(
+    "any bank's snapshot retires vanished pending payments and one failing account does not stop the others",
+    async () => {
+      const [connection] = await query(
+        "INSERT INTO bank_connections(bank_name,country,session_cipher,valid_until) VALUES('LHV','EE',$1,now()+interval '30 days') RETURNING id",
+        [encrypt({ id: "isolation-test" })],
+      );
+      const [first, second] = await query(
+        "INSERT INTO accounts(connection_id,identification_hash,provider_uid,name,currency,last_sync_at) VALUES($1,'iso-a','iso-a','Isolation A','EUR','2026-10-03'),($1,'iso-b','iso-b','Isolation B','EUR','2026-10-03') RETURNING id",
+        [connection.id],
+      );
+      const fuel = pendingBank("TEST FUEL HOLD", "50.00", "2026-10-01");
+      await transaction((db) => importBankTransactions(first.id, [fuel], db));
+      const original = globalThis.fetch;
+      try {
+        globalThis.fetch = async (input) => {
+          const url = new URL(String(input));
+          if (url.pathname.endsWith("/balances"))
+            return Response.json({ balances: [] });
+          if (url.pathname.includes("/iso-b/"))
+            return Response.json({
+              transactions: [],
+              continuation_key: "same-page",
+            });
+          return Response.json({
+            transactions: [
+              {
+                ...bank("fuel-booked", "42.10", "TEST FUEL HOLD"),
+                booking_date: "2026-10-04",
+              },
+              { ...bank("hotel-hold", "100.00", "TEST HOTEL"), status: "HOLD" },
+              {
+                ...bank("cancelled", "9.99", "TEST CANCELLED"),
+                status: "CNCL",
+              },
+            ],
+          });
+        };
+        await assert.rejects(syncBank(connection.id), /Isolation B/);
+      } finally {
+        globalThis.fetch = original;
+      }
+      const rows = await query(
+        "SELECT source_key,status FROM transactions WHERE account_id=$1 ORDER BY source_key",
+        [first.id],
+      );
+      assert.deepEqual(
+        rows.map((row) => [row.source_key.split(":")[0], row.status]),
+        [
+          ["fp", "SUPERSEDED"],
+          ["ref", "BOOK"],
+          ["ref", "PDNG"],
+        ],
+      );
+      const [a, b] = await query(
+        "SELECT last_sync_at FROM accounts WHERE id=ANY($1::uuid[]) ORDER BY name",
+        [[first.id, second.id]],
+      );
+      assert.ok(new Date(a.last_sync_at) > new Date("2026-10-04"));
+      assert.equal(
+        new Date(b.last_sync_at).toISOString().slice(0, 10),
+        "2026-10-03",
+      );
+      const [status] = await query(
+        "SELECT last_error FROM bank_connections WHERE id=$1",
+        [connection.id],
+      );
+      assert.match(status.last_error, /repeated a history page/);
+      // The connection's lock is released after a failure.
+      const [lock] = await query(
+        "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
+        [`bank:${connection.id}`],
+      );
+      assert.equal(lock.locked, true);
+      await query("SELECT pg_advisory_unlock(hashtext($1))", [
+        `bank:${connection.id}`,
+      ]);
+    },
+  );
+  await check(
+    "a booked payment settles a pending payment only once",
+    async () => {
+      const [wallet] = await query(
+        "INSERT INTO accounts(identification_hash,name,currency) VALUES('settle-once','Settle once','EUR') RETURNING id",
+      );
+      const monday = pendingBank("TEST CAFE", "3.50", "2026-10-05"),
+        tuesday = pendingBank("TEST CAFE", "3.50", "2026-10-06"),
+        booked = {
+          ...bank("cafe-monday", "3.50", "TEST CAFE"),
+          booking_date: "2026-10-05",
+        };
+      await transaction((db) =>
+        importBankTransactions(wallet.id, [monday], db),
+      );
+      await transaction((db) =>
+        importBankTransactions(wallet.id, [booked], db),
+      );
+      await transaction((db) =>
+        importBankTransactions(wallet.id, [tuesday], db),
+      );
+      await query(
+        "UPDATE transactions SET note='Tuesday coffee' WHERE account_id=$1 AND fingerprint=$2",
+        [wallet.id, bankFingerprint(tuesday)],
+      );
+      // The overlapping sync returns Monday's booking again.
+      await transaction((db) =>
+        importBankTransactions(wallet.id, [booked, tuesday], db),
+      );
+      const statuses = await query(
+        "SELECT fingerprint,status,note FROM transactions WHERE account_id=$1 AND status<>'BOOK'",
+        [wallet.id],
+      );
+      assert.deepEqual(
+        statuses.map((row) => [row.fingerprint, row.status]).sort(),
+        [
+          [bankFingerprint(monday), "SUPERSEDED"],
+          [bankFingerprint(tuesday), "PDNG"],
+        ].sort(),
+      );
+    },
+  );
+  await check(
+    "an explicit receipt choice on a pending payment survives settlement over merchant history",
+    async () => {
+      const { setReceiptRequirements } =
+        await import("../src/server/receipt-requirements");
+      const [wallet] = await query(
+        "INSERT INTO accounts(identification_hash,name,currency) VALUES('taxi-wallet','Taxi wallet','EUR') RETURNING id",
+      );
+      await transaction((db) =>
+        importBankTransactions(
+          wallet.id,
+          [
+            {
+              ...bank("taxi-history", "8.00", "TEST TAXI"),
+              booking_date: "2026-09-20",
+            },
+          ],
+          db,
+        ),
+      );
+      const [history] = await query(
+        "SELECT id FROM transactions WHERE source_key='ref:taxi-history'",
+      );
+      await transaction((db) => setReceiptRequirements([history.id], true, db));
+      const pending = pendingBank("TEST TAXI", "7.00", "2026-10-10");
+      await transaction((db) =>
+        importBankTransactions(wallet.id, [pending], db),
+      );
+      const [row] = await query(
+        "SELECT id,receipt_not_required FROM transactions WHERE account_id=$1 AND fingerprint=$2",
+        [wallet.id, bankFingerprint(pending)],
+      );
+      assert.equal(row.receipt_not_required, true);
+      await transaction((db) => setReceiptRequirements([row.id], false, db));
+      await transaction((db) =>
+        importBankTransactions(
+          wallet.id,
+          [
+            {
+              ...bank("taxi-booked", "7.00", "TEST TAXI"),
+              booking_date: "2026-10-11",
+            },
+          ],
+          db,
+        ),
+      );
+      const [booked] = await query(
+        "SELECT receipt_not_required FROM transactions WHERE source_key='ref:taxi-booked'",
+      );
+      assert.equal(booked.receipt_not_required, false);
     },
   );
   console.log(`${checks} integration checks passed in isolated databases.`);

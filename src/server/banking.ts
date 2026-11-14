@@ -207,6 +207,26 @@ export async function completeBankAuthorization(
   await enqueue("bank-sync", { connectionId: id }, id);
   return id;
 }
+// Enable Banking also reports held, cancelled, rejected, and scheduled
+// entries. Holds are pending card authorizations; the others never moved money.
+export function bankStatus(raw: BankTransaction): "BOOK" | "PDNG" | null {
+  const status = raw.status || "BOOK";
+  if (status === "PDNG" || status === "HOLD") return "PDNG";
+  if (["CNCL", "RJCT", "SCHD"].includes(status)) return null;
+  return "BOOK";
+}
+// The stable identity of each record, numbering identical reference-less
+// records in the order the bank returned them.
+export function bankSourceKeys(records: BankTransaction[]): string[] {
+  const occurrences = new Map<string, number>();
+  return records.map((raw) => {
+    if (raw.entry_reference) return `ref:${raw.entry_reference}`;
+    const fingerprint = bankFingerprint(raw);
+    const ordinal = (occurrences.get(fingerprint) || 0) + 1;
+    occurrences.set(fingerprint, ordinal);
+    return `fp:${fingerprint}:${ordinal}`;
+  });
+}
 export function bankFingerprint(raw: BankTransaction): string {
   return digest(
     JSON.stringify([
@@ -244,10 +264,12 @@ export async function importBankTransactions(
       )
     ).map((a) => a.iban.replace(/\s/g, "").toUpperCase()),
   );
-  const occurrences = new Map<string, number>();
+  records = records.filter((raw) => bankStatus(raw));
+  const keys = bankSourceKeys(records);
   const bookedIds = new Set<string>();
   let count = 0;
-  for (const raw of records) {
+  for (const [index, raw] of records.entries()) {
+    const status = bankStatus(raw)!;
     const currency = raw.transaction_amount.currency.toUpperCase();
     const magnitude = Math.abs(
       parseMoney(raw.transaction_amount.amount, currency),
@@ -262,11 +284,11 @@ export async function importBankTransactions(
         : raw.debtor?.name) ||
       raw.creditor?.name ||
       raw.debtor?.name ||
-      (raw.status === "PDNG" ? description : "") ||
+      (status === "PDNG" ? description : "") ||
       "Bank transaction";
     const sourceDate =
       raw.booking_date || raw.transaction_date || raw.value_date;
-    if (!sourceDate && raw.status !== "PDNG")
+    if (!sourceDate && status !== "PDNG")
       throw new AppError(
         "The bank returned a transaction without a date. The import was not committed; retry or contact the bank.",
         502,
@@ -287,11 +309,7 @@ export async function importBankTransactions(
       raw.bank_transaction_code?.code,
     );
     const fingerprint = bankFingerprint(raw);
-    const ordinal = (occurrences.get(fingerprint) || 0) + 1;
-    occurrences.set(fingerprint, ordinal);
-    const key = raw.entry_reference
-      ? `ref:${raw.entry_reference}`
-      : `fp:${fingerprint}:${ordinal}`;
+    const key = keys[index];
     const [entry] = await query(
       `INSERT INTO transactions(account_id,source_key,source_reference,fingerprint,amount,currency,kind,status,booked_at,value_at,merchant,description,counterparty_iban,mcc,raw)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
@@ -299,7 +317,8 @@ export async function importBankTransactions(
       kind=CASE WHEN transactions.manual THEN transactions.kind ELSE excluded.kind END,status=excluded.status,
       booked_at=excluded.booked_at,value_at=excluded.value_at,merchant=excluded.merchant,description=excluded.description,
       counterparty_iban=excluded.counterparty_iban,mcc=excluded.mcc,raw=excluded.raw,updated_at=now()
-      RETURNING id,manual,(xmax=0) AS inserted`,
+      RETURNING id,manual,(xmax=0) AS inserted,
+        (SELECT previous.status FROM transactions previous WHERE previous.id=transactions.id) AS previous_status`,
       [
         accountId,
         key,
@@ -308,7 +327,7 @@ export async function importBankTransactions(
         amount,
         currency,
         kind,
-        raw.status || "BOOK",
+        status,
         bookedAt,
         raw.value_date?.slice(0, 10) || null,
         merchant,
@@ -323,7 +342,11 @@ export async function importBankTransactions(
       "INSERT INTO transaction_revisions(transaction_id,payload_hash,raw) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
       [entry.id, digest(JSON.stringify(raw)), JSON.stringify(raw)],
     );
-    if ((raw.status || "BOOK") === "BOOK") bookedIds.add(entry.id);
+    // Settle pending payments only for newly booked rows. Rebooking an
+    // existing payment on every overlapping sync could claim a newer,
+    // identical pending payment.
+    if (status === "BOOK" && entry.previous_status !== "BOOK")
+      bookedIds.add(entry.id);
     if (entry.manual) {
       const existing = await query(
         "SELECT * FROM allocations WHERE transaction_id=$1",
@@ -449,7 +472,33 @@ async function settlePendingPayment(entryId: string, db: DB) {
       0,
     );
     if (linkedAmount <= Math.abs(amount)) {
-      if (predecessor.receipt_not_required)
+      // An explicit choice on the pending payment wins over a value the
+      // booked payment inherited from its merchant's history.
+      const [explicit] = await query(
+        `SELECT (change->>'receiptNotRequired')::boolean AS value FROM corrections
+        WHERE entity='transaction' AND entity_id=$1 AND jsonb_typeof(change->'receiptNotRequired')='boolean'
+          AND NOT (change ? 'inheritedFromMerchant')
+        ORDER BY created_at DESC LIMIT 1`,
+        [predecessor.id],
+        db,
+      );
+      if (explicit) {
+        await db.query(
+          "UPDATE transactions SET receipt_not_required=$2 WHERE id=$1",
+          [entry.id, explicit.value],
+        );
+        await db.query(
+          "INSERT INTO corrections(entity,entity_id,change) VALUES('transaction',$1,$2)",
+          [
+            entry.id,
+            JSON.stringify({
+              receiptNotRequired: explicit.value,
+              previousReceiptNotRequired: entry.receipt_not_required,
+              settledFrom: predecessor.id,
+            }),
+          ],
+        );
+      } else if (predecessor.receipt_not_required)
         await db.query(
           "UPDATE transactions SET receipt_not_required=true WHERE id=$1",
           [entry.id],
@@ -512,30 +561,47 @@ export async function syncBank(
   psuHeaders: Record<string, string> = {},
 ) {
   const db = await pool.connect();
-  const [lock] = await query(
-    "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
-    [`bank:${connectionId}`],
-    db,
-  );
-  if (!lock.locked) {
-    db.release();
-    return;
+  let locked = false;
+  try {
+    const [lock] = await query(
+      "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
+      [`bank:${connectionId}`],
+      db,
+    );
+    locked = lock.locked;
+    if (!locked) return;
+    await syncLockedBank(db, connectionId, psuHeaders);
+  } finally {
+    try {
+      if (locked)
+        await db.query("SELECT pg_advisory_unlock(hashtext($1))", [
+          `bank:${connectionId}`,
+        ]);
+    } finally {
+      db.release();
+    }
   }
+}
+async function syncLockedBank(
+  db: DB,
+  connectionId: string,
+  psuHeaders: Record<string, string>,
+) {
   const [run] = await query(
     "INSERT INTO import_runs(type,source_id) VALUES('bank',$1) RETURNING id",
     [connectionId],
     db,
   );
-  await db.query(
-    "UPDATE bank_connections SET last_attempt_at=now() WHERE id=$1",
-    [connectionId],
-  );
   try {
-    const [connection] = await query(
-      "SELECT * FROM bank_connections WHERE id=$1",
+    await db.query(
+      "UPDATE bank_connections SET last_attempt_at=now() WHERE id=$1",
       [connectionId],
-      db,
     );
+    const [connection] = await query<{
+      bank_name: string;
+      status: string;
+      valid_until: string;
+    }>("SELECT * FROM bank_connections WHERE id=$1", [connectionId], db);
     if (!connection || connection.status === "disconnected") {
       await db.query(
         "UPDATE import_runs SET status='complete',finished_at=now() WHERE id=$1",
@@ -545,125 +611,25 @@ export async function syncBank(
     }
     if (new Date(connection.valid_until).valueOf() <= Date.now())
       throw new AppError("Bank consent has expired. Reconnect this bank.", 410);
-    const accounts = await query(
+    const accounts = await query<{
+      id: string;
+      name: string;
+      provider_uid: string;
+      last_sync_at: string | null;
+    }>(
       "SELECT * FROM accounts WHERE connection_id=$1 AND provider_uid IS NOT NULL AND NOT ignored",
       [connectionId],
       db,
     );
-    const startDate = await importStartDate(db);
     let count = 0;
+    const failures: string[] = [];
     for (const account of accounts) {
-      const base = new URLSearchParams(
-        account.last_sync_at
-          ? {
-              date_from: new Date(
-                new Date(account.last_sync_at).valueOf() - 14 * 86400000,
-              )
-                .toISOString()
-                .slice(0, 10),
-              date_to: new Intl.DateTimeFormat("sv-SE", {
-                timeZone: "Europe/Tallinn",
-              }).format(new Date()),
-              strategy: "default",
-            }
-          : { strategy: "default" },
-      );
-      if (!base.get("date_from") || base.get("date_from")! < startDate)
-        base.set("date_from", startDate);
-      let cursor: string | null = null,
-        pages = 0;
-      const records: BankTransaction[] = [];
-      const pendingCounts = new Map<string, number>();
-      const sebPendingSnapshot = /\bSEB\b/i.test(connection.bank_name);
-      do {
-        const params = new URLSearchParams(base);
-        if (cursor) params.set("continuation_key", cursor);
-        const data = await bankingRequest<{
-          transactions: BankTransaction[];
-          continuation_key?: string;
-        }>(
-          `/accounts/${encodeURIComponent(account.provider_uid)}/transactions?${params}`,
-          undefined,
-          psuHeaders,
-        );
-        // SEB repeats its complete pending list on every history page.
-        // Keep the largest per-page multiplicity, preserving distinct identical
-        // purchases returned together on one page.
-        const pagePendingCounts = new Map<string, number>();
-        for (const record of data.transactions) {
-          if (record.status === "PDNG" && sebPendingSnapshot) {
-            const key = record.entry_reference
-              ? `ref:${record.entry_reference}`
-              : bankFingerprint(record);
-            const occurrence = (pagePendingCounts.get(key) || 0) + 1;
-            pagePendingCounts.set(key, occurrence);
-            if (occurrence <= (pendingCounts.get(key) || 0)) {
-              continue;
-            }
-            pendingCounts.set(key, occurrence);
-          }
-          records.push(record);
-        }
-        cursor = data.continuation_key || null;
-        if (++pages > 1000 || records.length > 100000)
-          throw new AppError(
-            "The bank history import reached its safety limit. Retry with a shorter date range.",
-            502,
-          );
-        if (!data.transactions.length && cursor)
-          await new Promise((resolve) => setTimeout(resolve, 300));
-      } while (cursor);
-      await transaction(async (tx) => {
-        const currentStart = await lockImportWindow(tx);
-        if (sebPendingSnapshot) {
-          // The complete SEB pending snapshot also replaces old reference-less
-          // copies that have disappeared or booked since the previous import.
-          // Retire these before settlement so obsolete copies cannot make a
-          // protected pending receipt or manual correction appear ambiguous.
-          const keys = [...pendingCounts].flatMap(([fingerprint, n]) =>
-            fingerprint.startsWith("ref:")
-              ? []
-              : Array.from(
-                  { length: n },
-                  (_, i) => `fp:${fingerprint}:${i + 1}`,
-                ),
-          );
-          await tx.query(
-            `UPDATE transactions t SET status='SUPERSEDED',updated_at=now() WHERE account_id=$1 AND status='PDNG'
-            AND source_key LIKE 'fp:%' AND NOT (source_key=ANY($2::text[])) AND NOT manual AND NOT receipt_not_required
-            AND (booked_at IS NULL OR $3::date IS NULL OR booked_at >= $3::date)
-            AND NOT EXISTS(SELECT 1 FROM receipt_payments p WHERE p.transaction_id=t.id)`,
-            [account.id, keys, base.get("date_from")],
-          );
-        }
-        count += await importBankTransactions(account.id, records, tx);
-        const dates = records
-          .map((t) => t.booking_date || t.transaction_date || t.value_date)
-          .filter((date): date is string =>
-            Boolean(date && date.slice(0, 10) >= currentStart),
-          )
-          .sort();
-        await tx.query(
-          `UPDATE accounts SET last_sync_at=now(),history_from=LEAST(history_from,$2::date),history_to=GREATEST(history_to,$3::date) WHERE id=$1`,
-          [
-            account.id,
-            dates[0]?.slice(0, 10) || null,
-            dates.at(-1)?.slice(0, 10) || null,
-          ],
-        );
-      });
+      // One failing account must not stop the connection's other accounts.
       try {
-        const balances = await bankingRequest(
-          `/accounts/${encodeURIComponent(account.provider_uid)}/balances`,
-          undefined,
-          psuHeaders,
-        );
-        await db.query("UPDATE accounts SET balance=$2 WHERE id=$1", [
-          account.id,
-          JSON.stringify(balances),
-        ]);
-      } catch {
-        /* Transaction synchronization remains successful if only balances are unavailable. */
+        count += await syncAccount(db, connection, account, psuHeaders);
+      } catch (error) {
+        if (error instanceof AppError && error.status === 410) throw error;
+        failures.push(`${account.name}: ${publicError(error)}`);
       }
     }
     await transaction(async (tx) => {
@@ -674,6 +640,11 @@ export async function syncBank(
       ))
         await autoMatchReceipt(receipt.id, tx);
     });
+    if (failures.length)
+      throw new AppError(
+        `${failures.length} of ${accounts.length} accounts could not be imported. ${failures.join(" ")}`,
+        502,
+      );
     await db.query(
       "UPDATE bank_connections SET last_sync_at=now(),last_error=NULL,status='active' WHERE id=$1",
       [connectionId],
@@ -697,10 +668,134 @@ export async function syncBank(
       [run.id, message],
     );
     throw error;
-  } finally {
-    await db.query("SELECT pg_advisory_unlock(hashtext($1))", [
-      `bank:${connectionId}`,
-    ]);
-    db.release();
   }
+}
+// Pending payments this many days before the sync window are retired when the
+// bank no longer lists them. Card authorizations rarely stay open that long.
+const PENDING_RETENTION_DAYS = 30;
+async function syncAccount(
+  db: DB,
+  connection: { bank_name: string },
+  account: { id: string; provider_uid: string; last_sync_at: string | null },
+  psuHeaders: Record<string, string>,
+) {
+  const startDate = await importStartDate(db);
+  const base = new URLSearchParams(
+    account.last_sync_at
+      ? {
+          date_from: new Date(
+            new Date(account.last_sync_at).valueOf() - 14 * 86400000,
+          )
+            .toISOString()
+            .slice(0, 10),
+          date_to: new Intl.DateTimeFormat("sv-SE", {
+            timeZone: "Europe/Tallinn",
+          }).format(new Date()),
+          strategy: "default",
+        }
+      : { strategy: "default" },
+  );
+  if (!base.get("date_from") || base.get("date_from")! < startDate)
+    base.set("date_from", startDate);
+  let cursor: string | null = null,
+    pages = 0;
+  const cursors = new Set<string>();
+  const records: BankTransaction[] = [];
+  const pendingCounts = new Map<string, number>();
+  const sebPendingSnapshot = /\bSEB\b/i.test(connection.bank_name);
+  do {
+    const params = new URLSearchParams(base);
+    if (cursor) params.set("continuation_key", cursor);
+    const data = await bankingRequest<{
+      transactions: BankTransaction[];
+      continuation_key?: string;
+    }>(
+      `/accounts/${encodeURIComponent(account.provider_uid)}/transactions?${params}`,
+      undefined,
+      psuHeaders,
+    );
+    // SEB repeats its complete pending list on every history page.
+    // Keep the largest per-page multiplicity, preserving distinct identical
+    // purchases returned together on one page.
+    const pagePendingCounts = new Map<string, number>();
+    for (const record of data.transactions) {
+      if (record.status === "PDNG" && sebPendingSnapshot) {
+        const key = record.entry_reference
+          ? `ref:${record.entry_reference}`
+          : bankFingerprint(record);
+        const occurrence = (pagePendingCounts.get(key) || 0) + 1;
+        pagePendingCounts.set(key, occurrence);
+        if (occurrence <= (pendingCounts.get(key) || 0)) {
+          continue;
+        }
+        pendingCounts.set(key, occurrence);
+      }
+      records.push(record);
+    }
+    cursor = data.continuation_key || null;
+    if (cursor && cursors.has(cursor))
+      throw new AppError(
+        "The bank repeated a history page. The import was not committed; retry later.",
+        502,
+      );
+    if (cursor) cursors.add(cursor);
+    if (++pages > 1000 || records.length > 100000)
+      throw new AppError(
+        "The bank history import reached its safety limit. Retry with a shorter date range.",
+        502,
+      );
+    if (!data.transactions.length && cursor)
+      await new Promise((resolve) => setTimeout(resolve, 300));
+  } while (cursor);
+  let count = 0;
+  await transaction(async (tx) => {
+    const currentStart = await lockImportWindow(tx);
+    // The complete history is the bank's current pending snapshot. Pending
+    // payments it no longer lists have booked under another identity or were
+    // released. Retire these before settlement so obsolete copies cannot make
+    // a protected pending receipt or manual correction appear ambiguous.
+    // Corrected, receipt-linked, and one-off pending payments stay until
+    // settlement or dismissal.
+    await tx.query(
+      `UPDATE transactions t SET status='SUPERSEDED',updated_at=now() WHERE account_id=$1 AND status='PDNG'
+        AND NOT (source_key=ANY($2::text[])) AND NOT manual AND NOT receipt_not_required AND NOT forecast_excluded
+        AND (booked_at IS NULL OR $3::date IS NULL OR booked_at >= $3::date OR booked_at < $3::date-$4::int)
+        AND NOT EXISTS(SELECT 1 FROM receipt_payments p WHERE p.transaction_id=t.id)`,
+      [
+        account.id,
+        bankSourceKeys(records.filter((raw) => bankStatus(raw))),
+        base.get("date_from"),
+        PENDING_RETENTION_DAYS,
+      ],
+    );
+    count = await importBankTransactions(account.id, records, tx);
+    const dates = records
+      .map((t) => t.booking_date || t.transaction_date || t.value_date)
+      .filter((date): date is string =>
+        Boolean(date && date.slice(0, 10) >= currentStart),
+      )
+      .sort();
+    await tx.query(
+      `UPDATE accounts SET last_sync_at=now(),history_from=LEAST(history_from,$2::date),history_to=GREATEST(history_to,$3::date) WHERE id=$1`,
+      [
+        account.id,
+        dates[0]?.slice(0, 10) || null,
+        dates.at(-1)?.slice(0, 10) || null,
+      ],
+    );
+  });
+  try {
+    const balances = await bankingRequest(
+      `/accounts/${encodeURIComponent(account.provider_uid)}/balances`,
+      undefined,
+      psuHeaders,
+    );
+    await db.query("UPDATE accounts SET balance=$2 WHERE id=$1", [
+      account.id,
+      JSON.stringify(balances),
+    ]);
+  } catch {
+    /* Transaction synchronization remains successful if only balances are unavailable. */
+  }
+  return count;
 }
