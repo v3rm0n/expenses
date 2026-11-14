@@ -1,4 +1,8 @@
-import { lockImportWindow, removeReceipts } from "./import-window";
+import {
+  lockImportWindow,
+  removeReceiptCashPayments,
+  removeReceipts,
+} from "./import-window";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config";
@@ -9,7 +13,12 @@ import { parseReceipt } from "../lib/receipt-parser";
 import { normalize, matchingRule } from "../lib/classification";
 import type { Retailer, Rule } from "../lib/types";
 import { enqueue } from "./queue";
-import { applyAllocations, autoMatchReceipt, reclassify } from "./ledger";
+import {
+  applyAllocations,
+  autoMatchReceipt,
+  linkReceipt,
+  reclassify,
+} from "./ledger";
 import {
   recategorizeWoltDiscounts,
   type ReceiptOrderContext,
@@ -570,4 +579,73 @@ export async function applyRulesToHistory() {
     }
     return reclassify(db);
   });
+}
+// Records the unpaid part of a receipt as a cash payment. Recording again
+// tops up the receipt's existing cash payment rather than replacing it.
+export async function recordCashPayment(id: string, db: DB) {
+  const startDate = await lockImportWindow(db);
+  const [receipt] = await query(
+    "SELECT * FROM receipts WHERE id=$1 FOR UPDATE",
+    [id],
+    db,
+  );
+  if (
+    !receipt ||
+    !["ready", "matched"].includes(receipt.status) ||
+    !receipt.total
+  )
+    throw new AppError("Validate the receipt before recording cash payment.");
+  if (receipt.purchased_at < startDate)
+    throw new AppError(
+      `This receipt is before the import start date (${startDate}).`,
+    );
+  const [account] = await query(
+    "INSERT INTO accounts(identification_hash,name,currency,source) VALUES($1,$2,$3,'cash') ON CONFLICT(identification_hash) DO UPDATE SET name=excluded.name RETURNING id",
+    [
+      `cash:${receipt.currency}`,
+      `Cash · ${receipt.currency}`,
+      receipt.currency,
+    ],
+    db,
+  );
+  const sourceKey = `receipt:${id}`;
+  const [paid] = await query(
+    `SELECT coalesce(sum(p.amount) FILTER (WHERE t.account_id=$2 AND t.source_key=$3),0)::bigint AS own,
+      coalesce(sum(p.amount),0)::bigint AS total
+    FROM receipt_payments p JOIN transactions t ON t.id=p.transaction_id WHERE p.receipt_id=$1`,
+    [id, account.id, sourceKey],
+    db,
+  );
+  const remaining = Math.abs(receipt.total) - paid.total;
+  if (remaining <= 0)
+    throw new AppError("This receipt is already fully linked.");
+  const amount = paid.own + remaining;
+  const [entry] = await query(
+    "INSERT INTO transactions(account_id,source_key,amount,currency,kind,booked_at,merchant) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(account_id,source_key) DO UPDATE SET amount=excluded.amount RETURNING id",
+    [
+      account.id,
+      sourceKey,
+      -Math.sign(receipt.total) * amount,
+      receipt.currency,
+      receipt.total > 0 ? "expense" : "refund",
+      receipt.purchased_at,
+      receipt.merchant,
+    ],
+    db,
+  );
+  await linkReceipt(id, entry.id, amount, false, db);
+}
+export async function unlinkReceipt(id: string, transactionId: string, db: DB) {
+  await db.query("SELECT id FROM receipts WHERE id=$1 FOR UPDATE", [id]);
+  await db.query(
+    "DELETE FROM receipt_payments WHERE receipt_id=$1 AND transaction_id=$2",
+    [id, transactionId],
+  );
+  await db.query(
+    "UPDATE receipts SET status=CASE WHEN EXISTS(SELECT 1 FROM receipt_payments WHERE receipt_id=$1) THEN 'matched' ELSE 'ready' END WHERE id=$1",
+    [id],
+  );
+  // A cash payment recorded for this receipt exists only for it.
+  await removeReceiptCashPayments([id], db, transactionId);
+  await applyAllocations(transactionId, db);
 }

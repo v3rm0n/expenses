@@ -7,7 +7,6 @@ import {
   importStartDate,
   saveImportStartDate,
   requireImportDate,
-  lockImportWindow,
 } from "./import-window";
 import { NextRequest, NextResponse } from "next/server";
 import { readFile } from "node:fs/promises";
@@ -76,6 +75,8 @@ import {
   deleteReceipt,
   replaceReceiptItems,
   applyRulesToHistory,
+  recordCashPayment,
+  unlinkReceipt,
   storageFile,
   storeReceipt,
 } from "./receipts";
@@ -532,6 +533,26 @@ export async function handleApi(
         });
       });
       return json({ ok: true, count });
+    }
+    if (
+      segments[0] === "transactions" &&
+      segments.length === 3 &&
+      segments[2] === "forecast-exclusion" &&
+      method === "POST"
+    ) {
+      // Marking a one-off purchase must not turn its automatic categories
+      // into a manual classification.
+      const id = uuid(segments[1]);
+      const input = z
+        .object({ forecastExcluded: z.boolean() })
+        .strict()
+        .parse(await request.json());
+      const [entry] = await query(
+        "UPDATE transactions SET forecast_excluded=$2,updated_at=now() WHERE id=$1 RETURNING id",
+        [id, input.forecastExcluded],
+      );
+      if (!entry) throw new AppError("Transaction not found.", 404);
+      return json({ ok: true });
     }
     if (
       segments[0] === "transactions" &&
@@ -1098,74 +1119,11 @@ export async function handleApi(
         const input = z
           .object({ transactionId: z.uuid() })
           .parse(await request.json());
-        await transaction(async (db) => {
-          await db.query("SELECT id FROM receipts WHERE id=$1 FOR UPDATE", [
-            id,
-          ]);
-          await db.query(
-            "DELETE FROM receipt_payments WHERE receipt_id=$1 AND transaction_id=$2",
-            [id, input.transactionId],
-          );
-          await db.query(
-            "UPDATE receipts SET status=CASE WHEN EXISTS(SELECT 1 FROM receipt_payments WHERE receipt_id=$1) THEN 'matched' ELSE 'ready' END WHERE id=$1",
-            [id],
-          );
-          await applyAllocations(input.transactionId, db);
-        });
+        await transaction((db) => unlinkReceipt(id, input.transactionId, db));
         return json({ ok: true });
       }
       if (action === "cash" && method === "POST") {
-        await transaction(async (db) => {
-          const startDate = await lockImportWindow(db);
-          const [receipt] = await query(
-            "SELECT * FROM receipts WHERE id=$1 FOR UPDATE",
-            [id],
-            db,
-          );
-          if (
-            !receipt ||
-            !["ready", "matched"].includes(receipt.status) ||
-            !receipt.total
-          )
-            throw new AppError(
-              "Validate the receipt before recording cash payment.",
-            );
-          if (receipt.purchased_at < startDate)
-            throw new AppError(
-              `This receipt is before the import start date (${startDate}).`,
-            );
-          const [paid] = await query(
-            "SELECT coalesce(sum(amount),0)::bigint AS amount FROM receipt_payments WHERE receipt_id=$1",
-            [id],
-            db,
-          );
-          const remaining = Math.abs(receipt.total) - paid.amount;
-          if (remaining <= 0)
-            throw new AppError("This receipt is already fully linked.");
-          const [account] = await query(
-            "INSERT INTO accounts(identification_hash,name,currency,source) VALUES($1,$2,$3,'cash') ON CONFLICT(identification_hash) DO UPDATE SET name=excluded.name RETURNING id",
-            [
-              `cash:${receipt.currency}`,
-              `Cash · ${receipt.currency}`,
-              receipt.currency,
-            ],
-            db,
-          );
-          const [entry] = await query(
-            "INSERT INTO transactions(account_id,source_key,amount,currency,kind,booked_at,merchant) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(account_id,source_key) DO UPDATE SET amount=excluded.amount RETURNING id",
-            [
-              account.id,
-              `receipt:${id}`,
-              -Math.sign(receipt.total) * remaining,
-              receipt.currency,
-              receipt.total > 0 ? "expense" : "refund",
-              receipt.purchased_at,
-              receipt.merchant,
-            ],
-            db,
-          );
-          await linkReceipt(id, entry.id, remaining, false, db);
-        });
+        await transaction((db) => recordCashPayment(id, db));
         return json({ ok: true });
       }
     }

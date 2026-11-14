@@ -4252,6 +4252,61 @@ KUUPÄEV: 02.10.2026`;
       assert.equal(booked.receipt_not_required, false);
     },
   );
+  await check(
+    "recording cash again tops up the receipt's cash payment, which is removed with its link",
+    async () => {
+      const { recordCashPayment, unlinkReceipt, deleteReceipt } =
+        await import("../src/server/receipts");
+      const receipt = await storeReceipt(
+        Buffer.from(receiptText("Rimi", "CASH-TOPUP-1", "05.10.2026")),
+        "cash-topup.txt",
+      );
+      await processReceipt(receipt.id);
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [
+            {
+              ...bank("cash-split-card", "2.00", "Card only shop"),
+              booking_date: "2026-10-05",
+            },
+          ],
+          db,
+        ),
+      );
+      const [card] = await query(
+        "SELECT id FROM transactions WHERE source_key='ref:cash-split-card'",
+      );
+      await transaction((db) =>
+        linkReceipt(receipt.id, card.id, 200, false, db),
+      );
+      await transaction((db) => recordCashPayment(receipt.id, db));
+      const cash = async () =>
+        (
+          await query(
+            "SELECT t.id,t.amount,p.amount AS linked FROM transactions t LEFT JOIN receipt_payments p ON p.transaction_id=t.id WHERE t.source_key=$1",
+            [`receipt:${receipt.id}`],
+          )
+        )[0];
+      assert.deepEqual(
+        { amount: (await cash()).amount, linked: (await cash()).linked },
+        { amount: -310, linked: 310 },
+      );
+      await transaction((db) => unlinkReceipt(receipt.id, card.id, db));
+      await transaction((db) => recordCashPayment(receipt.id, db));
+      assert.deepEqual(
+        { amount: (await cash()).amount, linked: (await cash()).linked },
+        { amount: -510, linked: 510 },
+      );
+      const cashId = (await cash()).id;
+      await transaction((db) => unlinkReceipt(receipt.id, cashId, db));
+      assert.equal(await cash(), undefined);
+      await transaction((db) => recordCashPayment(receipt.id, db));
+      assert.ok(await cash());
+      await deleteReceipt(receipt.id);
+      assert.equal(await cash(), undefined);
+    },
+  );
   console.log(`${checks} integration checks passed in isolated databases.`);
 } finally {
   await (await getQueue()).stop({ graceful: true });

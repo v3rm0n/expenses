@@ -69,6 +69,7 @@ export async function removeReceipts(ids: string[], db: DB) {
     "DELETE FROM corrections WHERE entity='receipt' AND entity_id=ANY($1::text[])",
     [receiptIds],
   );
+  await removeReceiptCashPayments(receiptIds, db);
   const removed = await query(
     "DELETE FROM receipts WHERE id=ANY($1::uuid[]) RETURNING id",
     [receiptIds],
@@ -129,4 +130,18 @@ export async function saveImportStartDate(date: string) {
       removedReceipts: receipts,
     };
   });
+}
+// Cash payments recorded from a receipt belong to that receipt. Remove them
+// with it, or when they are unlinked, so they cannot count as spending
+// alongside a bank payment linked later.
+export async function removeReceiptCashPayments(
+  receiptIds: string[],
+  db: DB,
+  transactionId?: string,
+) {
+  await db.query(
+    `DELETE FROM transactions t USING accounts a WHERE a.id=t.account_id AND a.source='cash'
+    AND t.source_key=ANY($1::text[]) AND ($2::uuid IS NULL OR t.id=$2::uuid)`,
+    [receiptIds.map((id) => `receipt:${id}`), transactionId || null],
+  );
 }
