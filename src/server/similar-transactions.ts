@@ -34,11 +34,15 @@ export async function similarCategory(
     currency: string;
   },
   db: DB,
-): Promise<string | undefined> {
+): Promise<{ category_id: string; updated_at: Date } | undefined> {
   if (!["expense", "refund"].includes(entry.kind) || !entry.merchant.trim())
     return;
-  const rules = await query<{ pattern: string; category_id: string }>(
-    `SELECT pattern,category_id FROM similar_category_rules
+  const rules = await query<{
+    pattern: string;
+    category_id: string;
+    updated_at: Date;
+  }>(
+    `SELECT pattern,category_id,updated_at FROM similar_category_rules
     WHERE merchant=$1 AND kind=$2 AND currency=$3
     AND NOT EXISTS(SELECT 1 FROM receipt_payments WHERE transaction_id=$4)
     ORDER BY updated_at DESC,pattern`,
@@ -47,7 +51,32 @@ export async function similarCategory(
   );
   return rules.find((rule) =>
     matchesSimilarTransaction(entry, entry.merchant, rule.pattern),
-  )?.category_id;
+  );
+}
+
+export type SimilarCategoryRule = {
+  merchant: string;
+  pattern: string;
+  kind: "expense" | "refund";
+  currency: string;
+};
+export async function similarCategoryRules() {
+  return query(
+    `SELECT s.merchant,s.pattern,s.kind,s.currency,s.category_id,c.name AS category_name,s.updated_at
+    FROM similar_category_rules s JOIN categories c ON c.id=s.category_id
+    ORDER BY s.merchant,s.pattern,s.kind,s.currency`,
+  );
+}
+export async function deleteSimilarCategoryRule(
+  rule: SimilarCategoryRule,
+  db: DB,
+) {
+  const removed = await query(
+    "DELETE FROM similar_category_rules WHERE merchant=$1 AND pattern=$2 AND kind=$3 AND currency=$4 RETURNING merchant",
+    [rule.merchant, rule.pattern, rule.kind, rule.currency],
+    db,
+  );
+  return removed.length;
 }
 
 export type SimilarTransaction = {

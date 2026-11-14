@@ -4307,6 +4307,78 @@ KUUPÄEV: 02.10.2026`;
       assert.equal(await cash(), undefined);
     },
   );
+  await check(
+    "the most recent of a rule and a remembered similar category wins, and remembered ones can be deleted",
+    async () => {
+      const {
+        saveSimilarCategoryRule,
+        similarCategoryRules,
+        deleteSimilarCategoryRule,
+      } = await import("../src/server/similar-transactions");
+      const entry = {
+        merchant: "TEST STREAMING",
+        kind: "expense",
+        currency: "EUR",
+      };
+      await transaction((db) =>
+        saveSimilarCategoryRule(entry, "", "household", db),
+      );
+      await query(
+        "UPDATE similar_category_rules SET updated_at=now()-interval '1 day' WHERE merchant=$1",
+        ["test streaming"],
+      );
+      const [rule] = await query(
+        "INSERT INTO rules(field,pattern,category_id) VALUES('description','TEST PRIME VIDEO','subscriptions') RETURNING id",
+      );
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [
+            {
+              ...bank("streaming-1", "8.99", "TEST STREAMING"),
+              remittance_information: ["TEST PRIME VIDEO monthly"],
+            },
+          ],
+          db,
+        ),
+      );
+      const category = async () =>
+        (
+          await query(
+            "SELECT a.category_id FROM allocations a JOIN transactions t ON t.id=a.transaction_id WHERE t.source_key='ref:streaming-1'",
+          )
+        ).map((row) => row.category_id);
+      assert.deepEqual(await category(), ["subscriptions"]);
+      // Remembering the category again makes it the most recent instruction.
+      await transaction(async (db) => {
+        await saveSimilarCategoryRule(entry, "", "household", db);
+        await reclassify(db);
+      });
+      assert.deepEqual(await category(), ["household"]);
+      const remembered = (await similarCategoryRules()).find(
+        (row) => row.merchant === "test streaming",
+      );
+      assert.equal(remembered?.category_name, "Household supplies");
+      await transaction(async (db) => {
+        assert.equal(
+          await deleteSimilarCategoryRule(
+            {
+              merchant: "test streaming",
+              pattern: "",
+              kind: "expense",
+              currency: "EUR",
+            },
+            db,
+          ),
+          1,
+        );
+        await reclassify(db);
+      });
+      assert.deepEqual(await category(), ["subscriptions"]);
+      await query("DELETE FROM rules WHERE id=$1", [rule.id]);
+      await reclassify();
+    },
+  );
   console.log(`${checks} integration checks passed in isolated databases.`);
 } finally {
   await (await getQueue()).stop({ graceful: true });

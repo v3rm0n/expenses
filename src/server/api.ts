@@ -19,6 +19,8 @@ import { importAmazonPack, MAX_AMAZON_PACK_SIZE } from "./amazon";
 import {
   similarTransactions,
   saveSimilarCategoryRule,
+  similarCategoryRules,
+  deleteSimilarCategoryRule,
   type SimilarTransaction,
 } from "./similar-transactions";
 import { query, transaction, migrate } from "./db";
@@ -1310,6 +1312,25 @@ export async function handleApi(
         count: matches.length,
         examples: matches.slice(0, 5).map((row) => row.value),
       });
+    }
+    if (route === "rules/similar" && method === "GET")
+      return json(await similarCategoryRules());
+    if (route === "rules/similar" && method === "DELETE") {
+      const input = z
+        .object({
+          merchant: z.string().min(1).max(500),
+          pattern: z.string().max(500),
+          kind: z.enum(["expense", "refund"]),
+          currency: z.string().regex(/^[A-Z]{3}$/),
+        })
+        .strict()
+        .parse(await request.json());
+      await transaction(async (db) => {
+        if (!(await deleteSimilarCategoryRule(input, db)))
+          throw new AppError("Remembered category not found.", 404);
+        await reclassify(db);
+      });
+      return json({ ok: true });
     }
     if (route === "rules/apply" && method === "POST")
       return json({ count: await applyRulesToHistory() });

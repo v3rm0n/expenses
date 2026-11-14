@@ -77,6 +77,7 @@ export type Rule = {
   category_id: string;
   priority: number;
   enabled: boolean;
+  created_at?: string | Date;
 };
 export const CATEGORY_SEEDS = [
   ["groceries", "Groceries", "#447a5d"],

@@ -93,10 +93,22 @@ export async function applyAllocations(
       },
       db,
     );
-    if (savedCategory)
-      allocations = [{ categoryId: savedCategory, amount, source: "rule" }];
-    else if (rule && !ruleKind)
-      allocations = [{ categoryId: rule.category_id, amount, source: "rule" }];
+    // A remembered similar-payment category and a saved rule are both owner
+    // instructions; the most recent one wins.
+    const categoryRule = rule && !ruleKind ? rule : undefined;
+    const preferSaved =
+      savedCategory &&
+      (!categoryRule?.created_at ||
+        new Date(savedCategory.updated_at) >=
+          new Date(categoryRule.created_at));
+    if (preferSaved)
+      allocations = [
+        { categoryId: savedCategory.category_id, amount, source: "rule" },
+      ];
+    else if (categoryRule)
+      allocations = [
+        { categoryId: categoryRule.category_id, amount, source: "rule" },
+      ];
     else {
       const links = await query(
         `SELECT p.*,r.total,r.status FROM receipt_payments p JOIN receipts r ON r.id=p.receipt_id WHERE transaction_id=$1 ORDER BY p.created_at`,
