@@ -362,8 +362,8 @@ test("one-off purchases stay in actual spending and stop contributing to daily p
     ).json();
   expect((await overview()).outlook.variableSpent).toBe(20000);
   await page.goto(`/transactions/${id}`);
+  // The flag saves on its own, without saving the classification form.
   await page.getByLabel("One-off purchase", { exact: true }).check();
-  await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect
     .poll(async () => (await overview()).outlook.variableSpent)
     .toBe(0);
@@ -387,7 +387,6 @@ test("one-off purchases stay in actual spending and stop contributing to daily p
   expect((await page.request.get(`/api/transactions/${id}`)).ok()).toBe(true);
   expect((await overview()).outlook.variableSpent).toBe(0);
   await page.getByLabel("One-off purchase", { exact: true }).uncheck();
-  await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect
     .poll(async () => (await overview()).outlook.variableSpent)
     .toBe(20000);

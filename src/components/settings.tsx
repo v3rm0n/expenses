@@ -438,8 +438,16 @@ type Rule = {
   priority: number;
   enabled: boolean;
 };
+type SimilarRule = {
+  merchant: string;
+  pattern: string;
+  kind: "expense" | "refund";
+  currency: string;
+  category_name: string;
+};
 export function RulesView({ context: ctx }: { context: AppContext }) {
   const rules = useData<Rule[]>("rules", ctx.revision),
+    similarRules = useData<SimilarRule[]>("rules/similar", ctx.revision),
     [field, setField] = useState("merchant"),
     [pattern, setPattern] = useState(""),
     [category, setCategory] = useState("groceries"),
@@ -491,8 +499,9 @@ export function RulesView({ context: ctx }: { context: AppContext }) {
       <div className="notice subtle">
         <ShieldCheck size={18} />
         <span>
-          Manual corrections take priority. Rules apply next, followed by
-          receipt details and merchant suggestions.
+          Manual corrections take priority. Rules and remembered categories for
+          similar transactions apply next, with the most recent one winning,
+          followed by receipt details and merchant suggestions.
         </span>
       </div>
       <div className="detail-grid">
@@ -680,6 +689,72 @@ export function RulesView({ context: ctx }: { context: AppContext }) {
           </form>
         </section>
       </div>
+      <section className="panel">
+        <SectionTitle
+          title="Remembered similar transactions"
+          description="Saved when you apply a payment's category to similar transactions. Delete one to let rules and receipts decide again."
+        />
+        <ErrorMessage message={similarRules.error} />
+        {similarRules.data?.length ? (
+          <div className="rule-list">
+            {similarRules.data.map((rule) => (
+              <div
+                className="rule-row"
+                key={`${rule.merchant}|${rule.pattern}|${rule.kind}|${rule.currency}`}
+              >
+                <div>
+                  <strong>
+                    {rule.merchant}
+                    {rule.pattern
+                      ? ` · description contains “${rule.pattern}”`
+                      : ""}
+                  </strong>
+                  <small>
+                    {rule.category_name} ·{" "}
+                    {rule.kind === "refund" ? "Refunds" : "Expenses"} in{" "}
+                    {rule.currency}
+                  </small>
+                </div>
+                <button
+                  className="icon-button"
+                  aria-label={`Delete remembered category for ${rule.merchant}${rule.pattern ? ` ${rule.pattern}` : ""}`}
+                  disabled={busy}
+                  onClick={() => {
+                    if (
+                      confirm(
+                        "Forget this category and reclassify automatic entries?",
+                      )
+                    )
+                      void perform(
+                        () =>
+                          api(
+                            "rules/similar",
+                            {
+                              merchant: rule.merchant,
+                              pattern: rule.pattern,
+                              kind: rule.kind,
+                              currency: rule.currency,
+                            },
+                            "DELETE",
+                          ),
+                        "Remembered category deleted.",
+                      );
+                  }}
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : similarRules.loading ? (
+          <Loading />
+        ) : (
+          <Empty
+            title="Nothing remembered yet"
+            text="Choose “Apply category to similar transactions” when categorizing a payment to remember its category."
+          />
+        )}
+      </section>
     </div>
   );
 }

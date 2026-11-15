@@ -95,7 +95,7 @@ export async function syncLidl(interactive = false) {
             )
           ).length,
         ),
-      async (id, text) => {
+      async (id, text, expectedTotal) => {
         const [current] = await query(
           "SELECT value->>'cipher' AS cipher FROM settings WHERE key='lidl'",
           [],
@@ -105,13 +105,26 @@ export async function syncLidl(interactive = false) {
           throw new AppError(
             "The Lidl connection changed during import. Retry with the current settings.",
           );
-        const date = parseReceipt(text, "lidl").purchasedAt;
-        if (date && date < (await importStartDate(db))) return;
+        const date =
+          text === null ? null : parseReceipt(text, "lidl").purchasedAt;
+        if (text === null || (date && date < (await importStartDate(db)))) {
+          // Remember deleted and pre-start receipts so the daily import does
+          // not download them again. Moving the start date earlier forgets
+          // the skipped ones.
+          await query(
+            "INSERT INTO retailer_receipts(retailer,account_key,external_id,receipt_id) VALUES('lidl',$1,$2,NULL) ON CONFLICT DO NOTHING",
+            [account, id],
+            db,
+          );
+          return;
+        }
         const result = await storeReceipt(
           Buffer.from(text),
           `lidl-${id}.txt`,
           "lidl",
           "lidl",
+          undefined,
+          expectedTotal,
         );
         await transaction(async (tx) => {
           await lockImportWindow(tx);

@@ -240,9 +240,19 @@ export function transactionFilters(params: URLSearchParams) {
 }
 export async function transactionList(params: URLSearchParams, db: DB = pool) {
   const { where, values } = transactionFilters(params);
+  // Totals cover booked payments only, matching Overview. With a category
+  // filter, the category's share of split payments is totalled separately.
+  const category = params.get("category");
   const [count] = await query(
-    `SELECT count(*)::int AS count FROM transactions t WHERE ${where}`,
-    values,
+    `SELECT count(*)::int AS count,
+      coalesce(sum(t.amount) FILTER (WHERE t.status='BOOK'),0)::bigint AS booked_total,
+      ${
+        category
+          ? `coalesce(sum((SELECT sum(ca.amount) FROM allocations ca WHERE ca.transaction_id=t.id AND ca.category_id=$${values.length + 1})) FILTER (WHERE t.status='BOOK'),0)::bigint`
+          : "NULL::bigint"
+      } AS category_total
+    FROM transactions t WHERE ${where}`,
+    category ? [...values, category] : values,
     db,
   );
   const limit = Math.min(100, Math.max(1, Number(params.get("limit")) || 50)),
@@ -255,7 +265,14 @@ export async function transactionList(params: URLSearchParams, db: DB = pool) {
     [...values, limit, (page - 1) * limit],
     db,
   );
-  return { rows, count: count.count, page, limit };
+  return {
+    rows,
+    count: count.count,
+    page,
+    limit,
+    bookedTotal: count.booked_total,
+    categoryTotal: count.category_total,
+  };
 }
 const receiptColumns = `SELECT r.*,coalesce((SELECT sum(p.amount)::bigint FROM receipt_payments p WHERE p.receipt_id=r.id),0) AS linked_amount,
     (SELECT count(*)::int FROM receipt_items ri WHERE ri.receipt_id=r.id) AS item_count FROM receipts r`;

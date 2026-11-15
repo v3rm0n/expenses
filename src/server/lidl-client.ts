@@ -1,7 +1,6 @@
 import { chromium, type BrowserContext } from "playwright";
 import { convert } from "html-to-text";
 import { z } from "zod";
-import { parseLidlReceipt } from "../lib/lidl-receipt";
 import { parseMoney } from "../lib/money";
 import { AppError } from "./errors";
 
@@ -30,7 +29,8 @@ export interface LidlTransport {
   json(path: string): Promise<unknown>;
 }
 
-export function lidlReceiptText(detail: unknown, id: string, total: number) {
+// Returns the printed receipt as text, or null when Lidl has deleted it.
+export function lidlReceiptText(detail: unknown, id: string) {
   const result = z
     .object({
       ticket: z.object({
@@ -38,40 +38,39 @@ export function lidlReceiptText(detail: unknown, id: string, total: number) {
         isDeleted: z.boolean(),
         htmlPrintedReceipt: z
           .string()
-          .min(1)
-          .max(2 * 1024 * 1024),
+          .max(2 * 1024 * 1024)
+          .nullish(),
       }),
     })
     .parse(detail);
-  if (result.ticket.id !== id || result.ticket.isDeleted)
+  if (result.ticket.id !== id)
+    throw new AppError("Lidl returned a different receipt.", 502);
+  if (result.ticket.isDeleted) return null;
+  if (!result.ticket.htmlPrintedReceipt)
     throw new AppError(
-      "Lidl returned an unavailable or different receipt.",
+      "Lidl returned a receipt without its printed copy.",
       502,
     );
   // Preserve the printed rows inside <pre>; never render retailer HTML in the app.
-  const text = convert(result.ticket.htmlPrintedReceipt, {
+  return convert(result.ticket.htmlPrintedReceipt, {
     wordwrap: false,
     selectors: [{ selector: "img", format: "skip" }],
   })
     .replace(/\r\n/g, "\n")
     .trim();
-  const parsed = parseLidlReceipt(text);
-  if (
-    !parsed ||
-    parsed.total === null ||
-    parsed.total !== parseMoney(total, "EUR")
-  )
-    throw new AppError(
-      "The Lidl receipt does not agree with its purchase-history total. Import its original manually for review.",
-      502,
-    );
-  return text;
 }
 
 export async function importLidlHistory(
   transport: LidlTransport,
   hasReceipt: (id: string) => Promise<boolean>,
-  save: (id: string, text: string) => Promise<void>,
+  // A null text records a receipt Lidl has deleted, so it is not fetched
+  // again. The expected total comes from the purchase history; a receipt
+  // that disagrees is imported for review instead of stopping the import.
+  save: (
+    id: string,
+    text: string | null,
+    expectedTotal: number,
+  ) => Promise<void>,
 ) {
   const seen = new Set<string>();
   let count = 0;
@@ -95,8 +94,9 @@ export async function importLidlHistory(
       const detail = await transport.json(
         `/mre/api/v1/tickets/${encodeURIComponent(item.id)}?country=EE&languageCode=et-EE`,
       );
-      await save(item.id, lidlReceiptText(detail, item.id, item.totalAmount));
-      count++;
+      const text = lidlReceiptText(detail, item.id);
+      await save(item.id, text, parseMoney(item.totalAmount, "EUR"));
+      if (text !== null) count++;
     }
     if (page * result.size >= result.totalCount) return count;
     if (!result.items.length)

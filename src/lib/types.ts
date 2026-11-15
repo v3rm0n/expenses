@@ -22,6 +22,9 @@ export type ReceiptItem = {
   unit: string | null;
   amount: number;
   categoryId: string;
+  // The parser's own category before product rules, kept so rule changes can
+  // be undone without losing retailer-specific categories.
+  parsedCategoryId?: string;
   manual: boolean;
 };
 export type ParsedReceipt = {
@@ -74,6 +77,7 @@ export type Rule = {
   category_id: string;
   priority: number;
   enabled: boolean;
+  created_at?: string | Date;
 };
 export const CATEGORY_SEEDS = [
   ["groceries", "Groceries", "#447a5d"],

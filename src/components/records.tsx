@@ -90,7 +90,12 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
     rows: Entry[];
     count: number;
     limit: number;
+    bookedTotal: number;
+    categoryTotal: number | null;
   }>(`transactions?${params}`, ctx.revision, 30000);
+  const categoryName = ctx.state.categories.find(
+    (row) => row.id === category,
+  )?.name;
   const [selected, setSelected] = useState<string[]>([]);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
@@ -461,6 +466,10 @@ export function TransactionsView({ context: ctx }: { context: AppContext }) {
               {data.count
                 ? `${(page - 1) * data.limit + 1}–${Math.min(page * data.limit, data.count)} of ${data.count}`
                 : "0 transactions"}
+              {data.count > 0 &&
+                (data.categoryTotal !== null && category
+                  ? ` · ${formatMoney(data.categoryTotal, ctx.currency)} booked in ${categoryName || "this category"}`
+                  : ` · Net ${formatMoney(data.bookedTotal, ctx.currency)} booked`)}
             </span>
             <div>
               <button
@@ -674,7 +683,8 @@ export function TransactionDetailView({
   const [receiptNotRequired, setReceiptNotRequired] = useState(false),
     [receiptBusy, setReceiptBusy] = useState(false);
   const loadedClassification = useRef<string | null>(null);
-  const [forecastExcluded, setForecastExcluded] = useState(false);
+  const [forecastExcluded, setForecastExcluded] = useState(false),
+    [forecastBusy, setForecastBusy] = useState(false);
   const [kind, setKind] = useState("expense"),
     [note, setNote] = useState(""),
     [automatic, setAutomatic] = useState(false),
@@ -710,22 +720,21 @@ export function TransactionDetailView({
   useEffect(() => {
     if (data) {
       setReceiptNotRequired(data.receipt_not_required);
+      setForecastExcluded(data.forecast_excluded);
       const signature = JSON.stringify([
         data.id,
         data.kind,
         data.note,
         data.allocations,
-        data.forecast_excluded,
       ]);
       // A receipt action refreshes this record too. Keep unsaved category edits
-      // when only receipt links or the receipt requirement have changed.
+      // when only receipt links or the payment's flags have changed.
       if (loadedClassification.current === signature) return;
       loadedClassification.current = signature;
       setApplySimilar(false);
       setIncludeManual(false);
       setSimilarPattern(suggestedDescriptionPattern(data.description));
       setKind(data.kind);
-      setForecastExcluded(data.forecast_excluded);
       setNote(data.note);
       setAutomatic(false);
       setRows(
@@ -766,7 +775,6 @@ export function TransactionDetailView({
         kind,
         note,
         automatic,
-        forecastExcluded,
         allocations: rows,
         ...(applySimilar && canApplySimilar
           ? { similarPattern, similarIncludeManual: includeManual }
@@ -805,6 +813,28 @@ export function TransactionDetailView({
       setSaveError((e as Error).message);
     } finally {
       setReceiptBusy(false);
+    }
+  };
+  const updateForecastExclusion = async (value: boolean) => {
+    const previous = forecastExcluded;
+    setForecastExcluded(value);
+    setForecastBusy(true);
+    setSaveError(null);
+    try {
+      await api(`transactions/${id}/forecast-exclusion`, {
+        forecastExcluded: value,
+      });
+      ctx.notify(
+        value
+          ? "Payment excluded from the forecast pace."
+          : "Payment included in the forecast pace.",
+      );
+      ctx.refresh();
+    } catch (e) {
+      setForecastExcluded(previous);
+      setSaveError((e as Error).message);
+    } finally {
+      setForecastBusy(false);
     }
   };
   const remove = async () => {
@@ -947,13 +977,14 @@ export function TransactionDetailView({
                   <input
                     type="checkbox"
                     checked={forecastExcluded}
-                    onChange={(e) => setForecastExcluded(e.target.checked)}
+                    disabled={forecastBusy}
+                    onChange={(e) => updateForecastExclusion(e.target.checked)}
                   />
                   One-off purchase
                 </label>
                 <p className="form-help">
                   Count this payment in actual spending, but do not project
-                  repeats in the month-end forecast. Saved with your changes.
+                  repeats in the month-end forecast. Saved immediately.
                 </p>
               </>
             )}

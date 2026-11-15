@@ -7,7 +7,6 @@ import {
   importStartDate,
   saveImportStartDate,
   requireImportDate,
-  lockImportWindow,
 } from "./import-window";
 import { NextRequest, NextResponse } from "next/server";
 import { readFile } from "node:fs/promises";
@@ -20,6 +19,8 @@ import { importAmazonPack, MAX_AMAZON_PACK_SIZE } from "./amazon";
 import {
   similarTransactions,
   saveSimilarCategoryRule,
+  similarCategoryRules,
+  deleteSimilarCategoryRule,
   type SimilarTransaction,
 } from "./similar-transactions";
 import { query, transaction, migrate } from "./db";
@@ -44,7 +45,7 @@ import {
   addSession,
   assertOrigin,
   createOwner,
-  limitLogin,
+  withLoginLimit,
   login,
   logout,
   requireOwner,
@@ -75,6 +76,9 @@ import {
   MAX_FILE_SIZE,
   deleteReceipt,
   replaceReceiptItems,
+  applyRulesToHistory,
+  recordCashPayment,
+  unlinkReceipt,
   storageFile,
   storeReceipt,
 } from "./receipts";
@@ -97,7 +101,6 @@ import {
   contributionCategory,
   allocationAmount,
   normalize,
-  productCategory,
 } from "../lib/classification";
 import type { Allocation, Retailer, Rule } from "../lib/types";
 import {
@@ -201,21 +204,21 @@ export async function handleApi(
     }
     if (method !== "GET") assertOrigin(request);
     if (route === "auth/setup" && method === "POST") {
-      await limitLogin(request);
       const input = z
         .object({ name: z.string(), password: z.string(), token: z.string() })
-        .parse(await request.json());
-      await createOwner(input.name, input.password, input.token);
+        .parse(await boundedJson(request));
+      await withLoginLimit(request, () =>
+        createOwner(input.name, input.password, input.token),
+      );
       const response = json({ ok: true });
       await addSession(response, request);
       return response;
     }
     if (route === "auth/login" && method === "POST") {
-      await limitLogin(request);
       const input = z
         .object({ password: z.string() })
-        .parse(await request.json());
-      await login(input.password);
+        .parse(await boundedJson(request));
+      await withLoginLimit(request, () => login(input.password));
       const response = json({ ok: true });
       await addSession(response, request);
       return response;
@@ -536,6 +539,26 @@ export async function handleApi(
     if (
       segments[0] === "transactions" &&
       segments.length === 3 &&
+      segments[2] === "forecast-exclusion" &&
+      method === "POST"
+    ) {
+      // Marking a one-off purchase must not turn its automatic categories
+      // into a manual classification.
+      const id = uuid(segments[1]);
+      const input = z
+        .object({ forecastExcluded: z.boolean() })
+        .strict()
+        .parse(await request.json());
+      const [entry] = await query(
+        "UPDATE transactions SET forecast_excluded=$2,updated_at=now() WHERE id=$1 RETURNING id",
+        [id, input.forecastExcluded],
+      );
+      if (!entry) throw new AppError("Transaction not found.", 404);
+      return json({ ok: true });
+    }
+    if (
+      segments[0] === "transactions" &&
+      segments.length === 3 &&
       segments[2] === "receipt-requirement" &&
       method === "POST"
     ) {
@@ -838,9 +861,18 @@ export async function handleApi(
     if (route === "receipts" && method === "GET")
       return json(await receiptPage(params));
     if (route === "receipts/upload" && method === "POST") {
-      if (Number(request.headers.get("content-length")) > 100 * 1024 * 1024)
+      const limit = 100 * 1024 * 1024;
+      if (Number(request.headers.get("content-length")) > limit)
         throw new AppError("Upload at most 100 MB per batch.", 413);
-      const form = await request.formData(),
+      // Read through the limit even when the client omits Content-Length.
+      const form = await new Response(
+          new Uint8Array(await boundedBody(request, limit)),
+          {
+            headers: {
+              "Content-Type": request.headers.get("content-type") || "",
+            },
+          },
+        ).formData(),
         files = form
           .getAll("files")
           .filter((file): file is File => file instanceof File);
@@ -982,6 +1014,11 @@ export async function handleApi(
           "UPDATE receipts SET status='processing',error=NULL WHERE id=$1",
           [id],
         );
+        // An explicit retry tries again even after repeated interruptions.
+        await query(
+          "UPDATE import_runs SET error='Processing was interrupted before a retry.' WHERE type='receipt' AND source_id=$1 AND error='Processing was interrupted.'",
+          [id],
+        );
         await enqueue("receipt-parse", { receiptId: id }, id);
         return json({ ok: true }, 202);
       }
@@ -1098,74 +1135,11 @@ export async function handleApi(
         const input = z
           .object({ transactionId: z.uuid() })
           .parse(await request.json());
-        await transaction(async (db) => {
-          await db.query("SELECT id FROM receipts WHERE id=$1 FOR UPDATE", [
-            id,
-          ]);
-          await db.query(
-            "DELETE FROM receipt_payments WHERE receipt_id=$1 AND transaction_id=$2",
-            [id, input.transactionId],
-          );
-          await db.query(
-            "UPDATE receipts SET status=CASE WHEN EXISTS(SELECT 1 FROM receipt_payments WHERE receipt_id=$1) THEN 'matched' ELSE 'ready' END WHERE id=$1",
-            [id],
-          );
-          await applyAllocations(input.transactionId, db);
-        });
+        await transaction((db) => unlinkReceipt(id, input.transactionId, db));
         return json({ ok: true });
       }
       if (action === "cash" && method === "POST") {
-        await transaction(async (db) => {
-          const startDate = await lockImportWindow(db);
-          const [receipt] = await query(
-            "SELECT * FROM receipts WHERE id=$1 FOR UPDATE",
-            [id],
-            db,
-          );
-          if (
-            !receipt ||
-            !["ready", "matched"].includes(receipt.status) ||
-            !receipt.total
-          )
-            throw new AppError(
-              "Validate the receipt before recording cash payment.",
-            );
-          if (receipt.purchased_at < startDate)
-            throw new AppError(
-              `This receipt is before the import start date (${startDate}).`,
-            );
-          const [paid] = await query(
-            "SELECT coalesce(sum(amount),0)::bigint AS amount FROM receipt_payments WHERE receipt_id=$1",
-            [id],
-            db,
-          );
-          const remaining = Math.abs(receipt.total) - paid.amount;
-          if (remaining <= 0)
-            throw new AppError("This receipt is already fully linked.");
-          const [account] = await query(
-            "INSERT INTO accounts(identification_hash,name,currency,source) VALUES($1,$2,$3,'cash') ON CONFLICT(identification_hash) DO UPDATE SET name=excluded.name RETURNING id",
-            [
-              `cash:${receipt.currency}`,
-              `Cash · ${receipt.currency}`,
-              receipt.currency,
-            ],
-            db,
-          );
-          const [entry] = await query(
-            "INSERT INTO transactions(account_id,source_key,amount,currency,kind,booked_at,merchant) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(account_id,source_key) DO UPDATE SET amount=excluded.amount RETURNING id",
-            [
-              account.id,
-              `receipt:${id}`,
-              -Math.sign(receipt.total) * remaining,
-              receipt.currency,
-              receipt.total > 0 ? "expense" : "refund",
-              receipt.purchased_at,
-              receipt.merchant,
-            ],
-            db,
-          );
-          await linkReceipt(id, entry.id, remaining, false, db);
-        });
+        await transaction((db) => recordCashPayment(id, db));
         return json({ ok: true });
       }
     }
@@ -1353,6 +1327,25 @@ export async function handleApi(
         examples: matches.slice(0, 5).map((row) => row.value),
       });
     }
+    if (route === "rules/similar" && method === "GET")
+      return json(await similarCategoryRules());
+    if (route === "rules/similar" && method === "DELETE") {
+      const input = z
+        .object({
+          merchant: z.string().min(1).max(500),
+          pattern: z.string().max(500),
+          kind: z.enum(["expense", "refund"]),
+          currency: z.string().regex(/^[A-Z]{3}$/),
+        })
+        .strict()
+        .parse(await request.json());
+      await transaction(async (db) => {
+        if (!(await deleteSimilarCategoryRule(input, db)))
+          throw new AppError("Remembered category not found.", 404);
+        await reclassify(db);
+      });
+      return json({ ok: true });
+    }
     if (route === "rules/apply" && method === "POST")
       return json({ count: await applyRulesToHistory() });
     if (segments[0] === "rules" && segments.length === 2 && method === "POST") {
@@ -1464,7 +1457,8 @@ export async function handleApi(
           password: z.string().min(12).max(256),
         })
         .parse(await request.json());
-      await login(input.currentPassword);
+      // A stolen session must not allow unlimited password guesses.
+      await withLoginLimit(request, () => login(input.currentPassword));
       await transaction(async (db) => {
         await db.query("UPDATE owner SET password_hash=$1 WHERE id=1", [
           await hashPassword(input.password),
@@ -1557,33 +1551,6 @@ export async function handleApi(
     );
   }
 }
-async function applyRulesToHistory() {
-  return transaction(async (db) => {
-    const rules = await query<Rule>(
-      "SELECT * FROM rules WHERE enabled ORDER BY priority",
-      [],
-      db,
-    );
-    const items = await query(
-      "SELECT i.*,r.merchant FROM receipt_items i JOIN receipts r ON r.id=i.receipt_id WHERE NOT i.manual",
-      [],
-      db,
-    );
-    for (const item of items) {
-      const rule = matchingRule(
-        rules.filter((rule) => rule.field === "product"),
-        item.merchant || "",
-        "",
-        item.description,
-      );
-      await db.query("UPDATE receipt_items SET category_id=$2 WHERE id=$1", [
-        item.id,
-        rule?.category_id || productCategory(item.description),
-      ]);
-    }
-    return reclassify(db);
-  });
-}
 function documentResponse(
   buffer: Buffer,
   filename: string,
@@ -1599,11 +1566,20 @@ function documentResponse(
     },
   });
 }
+// Sign-in requests are accepted before authentication, so bound their size.
+async function boundedJson(request: NextRequest, limit = 64 * 1024) {
+  try {
+    return JSON.parse((await boundedBody(request, limit)).toString("utf8"));
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError("The request body is not valid JSON.");
+  }
+}
 export async function boundedBody(
   request: NextRequest,
   limit: number,
 ): Promise<Buffer> {
-  if (!request.body) throw new AppError("The email body is empty.");
+  if (!request.body) throw new AppError("The request body is empty.");
   const reader = request.body.getReader(),
     chunks: Uint8Array[] = [];
   let size = 0;

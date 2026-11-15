@@ -87,6 +87,9 @@ export async function saveImportStartDate(date: string) {
       "INSERT INTO settings(key,value) VALUES('import_start_date',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now()",
       [JSON.stringify(start)],
     );
+    // Retailer receipts skipped for the previous start date are fetched again.
+    if (start < previous)
+      await db.query("DELETE FROM retailer_receipts WHERE receipt_id IS NULL");
     const olderReceipts = await query<{ id: string }>(
       "SELECT id FROM receipts WHERE purchased_at<$1",
       [start],
@@ -129,4 +132,18 @@ export async function saveImportStartDate(date: string) {
       removedReceipts: receipts,
     };
   });
+}
+// A cash payment recorded from a receipt is removed when it is unlinked from
+// that receipt, so it cannot count as spending alongside a bank payment linked
+// later. Deleting the receipt keeps it, like any other recorded payment.
+export async function removeReceiptCashPayments(
+  receiptIds: string[],
+  db: DB,
+  transactionId?: string,
+) {
+  await db.query(
+    `DELETE FROM transactions t USING accounts a WHERE a.id=t.account_id AND a.source='cash'
+    AND t.source_key=ANY($1::text[]) AND ($2::uuid IS NULL OR t.id=$2::uuid)`,
+    [receiptIds.map((id) => `receipt:${id}`), transactionId || null],
+  );
 }

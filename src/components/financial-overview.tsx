@@ -228,9 +228,13 @@ export function FinancialOverviewView({
         {!past && outlook.dailyAllowance !== null && (
           <div className="allowance-pace">
             <strong>
-              {fmt(outlook.dailyAllowance * Math.min(7, outlook.remainingDays))}
+              {fmt(outlook.dailyAllowance * Math.min(7, outlook.allowanceDays))}
             </strong>
-            <span>for the next {Math.min(7, outlook.remainingDays)} days</span>
+            <span>
+              {outlook.allowanceDays === 1
+                ? "for today"
+                : `for the next ${Math.min(7, outlook.allowanceDays)} days${current ? ", including today" : ""}`}
+            </span>
             <small>{fmt(outlook.dailyAllowance)} per day</small>
           </div>
         )}
@@ -357,7 +361,9 @@ export function FinancialOverviewView({
                 <button
                   key={row.id}
                   onClick={() =>
-                    ctx.navigate(`/transactions?category=${row.id}&${query}`)
+                    ctx.navigate(
+                      `/transactions?category=${row.id}&status=BOOK&${query}`,
+                    )
                   }
                 >
                   <div className="planning-category-heading">

@@ -3331,6 +3331,10 @@ KUUPÄEV: 02.10.2026`;
         linked = pending("TEST LINKED PENDING", "5.10"),
         historical = {
           ...pending("TEST OLDER PENDING", "1.23"),
+          booking_date: "2026-09-01",
+        },
+        abandoned = {
+          ...pending("TEST ABANDONED PENDING", "2.34"),
           booking_date: "2026-01-02",
         },
         booked = {
@@ -3346,6 +3350,7 @@ KUUPÄEV: 02.10.2026`;
             manual,
             linked,
             historical,
+            abandoned,
           ],
           db,
         ),
@@ -3386,7 +3391,7 @@ KUUPÄEV: 02.10.2026`;
               [wallet.id],
             )
           )[0].n,
-          11,
+          12,
         );
         assert.equal(
           (
@@ -3414,6 +3419,17 @@ KUUPÄEV: 02.10.2026`;
             )
           )[0].n,
           5,
+        );
+        // Pending payments well before the sync window that the bank no
+        // longer lists are abandoned authorizations.
+        assert.equal(
+          (
+            await query(
+              "SELECT status FROM transactions WHERE account_id=$1 AND fingerprint=$2",
+              [wallet.id, bankFingerprint(abandoned)],
+            )
+          )[0].status,
+          "SUPERSEDED",
         );
         assert.equal(
           (
@@ -3957,6 +3973,693 @@ KUUPÄEV: 02.10.2026`;
       await writeFile(broken, corrupted);
       await assert.rejects(
         restoreBackup(restored.url, destination, config.encryptionKey, broken),
+      );
+    },
+  );
+  // Regression checks for review fixes.
+  await check(
+    "product rule changes keep parser categories and can be undone",
+    async () => {
+      const { applyRulesToHistory } = await import("../src/server/receipts");
+      const id = "0f1e2d3c4b5a69788796a5b4";
+      const receipt = await storeReceipt(
+        textPdf(woltReceiptText(false, id)),
+        "rule-history-wolt.pdf",
+        "wolt",
+        "email",
+        { orderId: id, total: 600, currency: "EUR" },
+      );
+      await processReceipt(receipt.id);
+      const categories = async () =>
+        Object.fromEntries(
+          (
+            await query(
+              "SELECT description,category_id FROM receipt_items WHERE receipt_id=$1 ORDER BY position",
+              [receipt.id],
+            )
+          ).map((row) => [row.description, row.category_id]),
+        );
+      const parsed = await categories();
+      assert.equal(parsed["Burger with fries"], "restaurants");
+      assert.equal(parsed.Lemonade, "restaurants");
+      const [rule] = await query(
+        "INSERT INTO rules(field,pattern,category_id) VALUES('product','Lemonade','groceries') RETURNING id",
+      );
+      await applyRulesToHistory();
+      assert.deepEqual(await categories(), {
+        ...parsed,
+        Lemonade: "groceries",
+      });
+      await query("DELETE FROM rules WHERE id=$1", [rule.id]);
+      await applyRulesToHistory();
+      assert.deepEqual(await categories(), parsed);
+    },
+  );
+  await check(
+    "corrupt images and repeatedly interrupted documents land in Review",
+    async () => {
+      const { imageDimensions } = await import("../src/server/receipts");
+      const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+      const corrupt = await storeReceipt(
+        Buffer.concat([signature, Buffer.from("not really an image")]),
+        "corrupt.png",
+      );
+      await assert.rejects(processReceipt(corrupt.id));
+      assert.equal(
+        (
+          await query("SELECT status FROM receipts WHERE id=$1", [corrupt.id])
+        )[0].status,
+        "review",
+      );
+      // A PNG header claiming 100k x 100k pixels is rejected before decoding.
+      const header = Buffer.alloc(33);
+      signature.copy(header);
+      header.writeUInt32BE(13, 8);
+      header.write("IHDR", 12);
+      header.writeUInt32BE(100000, 16);
+      header.writeUInt32BE(100000, 20);
+      assert.deepEqual(imageDimensions(header), {
+        width: 100000,
+        height: 100000,
+      });
+      const huge = await storeReceipt(header, "huge.png");
+      await assert.rejects(processReceipt(huge.id), /too large/);
+      const stuck = await storeReceipt(
+        Buffer.from(receiptText("Rimi", "STUCK-1")),
+        "stuck.txt",
+      );
+      for (let i = 0; i < 3; i++)
+        await query(
+          "INSERT INTO import_runs(type,source_id) VALUES('receipt',$1)",
+          [stuck.id],
+        );
+      // Each restart closes the run that never finished.
+      await query(
+        "UPDATE import_runs SET status='error',error='Processing was interrupted.',finished_at=now() WHERE source_id=$1 AND status='running'",
+        [stuck.id],
+      );
+      await query(
+        "INSERT INTO import_runs(type,source_id) VALUES('receipt',$1)",
+        [stuck.id],
+      );
+      await processReceipt(stuck.id);
+      const [row] = await query(
+        "SELECT status,error FROM receipts WHERE id=$1",
+        [stuck.id],
+      );
+      assert.equal(row.status, "review");
+      assert.match(row.error, /stopped repeatedly/);
+    },
+  );
+  const pendingBank = (merchant: string, amount: string, date: string) => ({
+    ...bank(undefined, amount, merchant),
+    status: "PDNG",
+    booking_date: date,
+    creditor: {},
+    debtor: {},
+    remittance_information: [merchant],
+  });
+  await check(
+    "any bank's snapshot retires vanished pending payments and one failing account does not stop the others",
+    async () => {
+      const [connection] = await query(
+        "INSERT INTO bank_connections(bank_name,country,session_cipher,valid_until) VALUES('LHV','EE',$1,now()+interval '30 days') RETURNING id",
+        [encrypt({ id: "isolation-test" })],
+      );
+      const [first, second] = await query(
+        "INSERT INTO accounts(connection_id,identification_hash,provider_uid,name,currency,last_sync_at) VALUES($1,'iso-a','iso-a','Isolation A','EUR','2026-10-03'),($1,'iso-b','iso-b','Isolation B','EUR','2026-10-03') RETURNING id",
+        [connection.id],
+      );
+      const fuel = pendingBank("TEST FUEL HOLD", "50.00", "2026-10-01");
+      await transaction((db) => importBankTransactions(first.id, [fuel], db));
+      const original = globalThis.fetch;
+      try {
+        globalThis.fetch = async (input) => {
+          const url = new URL(String(input));
+          if (url.pathname.endsWith("/balances"))
+            return Response.json({ balances: [] });
+          if (url.pathname.includes("/iso-b/"))
+            return Response.json({
+              transactions: [],
+              continuation_key: "same-page",
+            });
+          return Response.json({
+            transactions: [
+              {
+                ...bank("fuel-booked", "42.10", "TEST FUEL HOLD"),
+                booking_date: "2026-10-04",
+              },
+              { ...bank("hotel-hold", "100.00", "TEST HOTEL"), status: "HOLD" },
+              {
+                ...bank("cancelled", "9.99", "TEST CANCELLED"),
+                status: "CNCL",
+              },
+            ],
+          });
+        };
+        await assert.rejects(syncBank(connection.id), /Isolation B/);
+      } finally {
+        globalThis.fetch = original;
+      }
+      const rows = await query(
+        "SELECT source_key,status FROM transactions WHERE account_id=$1 ORDER BY source_key",
+        [first.id],
+      );
+      assert.deepEqual(
+        rows.map((row) => [row.source_key.split(":")[0], row.status]),
+        [
+          ["fp", "SUPERSEDED"],
+          ["ref", "BOOK"],
+          ["ref", "PDNG"],
+        ],
+      );
+      const [a, b] = await query(
+        "SELECT last_sync_at FROM accounts WHERE id=ANY($1::uuid[]) ORDER BY name",
+        [[first.id, second.id]],
+      );
+      assert.ok(new Date(a.last_sync_at) > new Date("2026-10-04"));
+      assert.equal(
+        new Date(b.last_sync_at).toISOString().slice(0, 10),
+        "2026-10-03",
+      );
+      const [status] = await query(
+        "SELECT last_error FROM bank_connections WHERE id=$1",
+        [connection.id],
+      );
+      assert.match(status.last_error, /repeated a history page/);
+      // The connection's lock is released after a failure.
+      const [lock] = await query(
+        "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
+        [`bank:${connection.id}`],
+      );
+      assert.equal(lock.locked, true);
+      await query("SELECT pg_advisory_unlock(hashtext($1))", [
+        `bank:${connection.id}`,
+      ]);
+    },
+  );
+  await check(
+    "a booked payment settles a pending payment only once",
+    async () => {
+      const [wallet] = await query(
+        "INSERT INTO accounts(identification_hash,name,currency) VALUES('settle-once','Settle once','EUR') RETURNING id",
+      );
+      const monday = pendingBank("TEST CAFE", "3.50", "2026-10-05"),
+        tuesday = pendingBank("TEST CAFE", "3.50", "2026-10-06"),
+        booked = {
+          ...bank("cafe-monday", "3.50", "TEST CAFE"),
+          booking_date: "2026-10-05",
+        };
+      await transaction((db) =>
+        importBankTransactions(wallet.id, [monday], db),
+      );
+      await transaction((db) =>
+        importBankTransactions(wallet.id, [booked], db),
+      );
+      await transaction((db) =>
+        importBankTransactions(wallet.id, [tuesday], db),
+      );
+      await query(
+        "UPDATE transactions SET note='Tuesday coffee' WHERE account_id=$1 AND fingerprint=$2",
+        [wallet.id, bankFingerprint(tuesday)],
+      );
+      // The overlapping sync returns Monday's booking again, and the bank
+      // still lists Monday's settled pending copy.
+      await transaction((db) =>
+        importBankTransactions(wallet.id, [booked, monday, tuesday], db),
+      );
+      const statuses = await query(
+        "SELECT fingerprint,status,note FROM transactions WHERE account_id=$1 AND status<>'BOOK'",
+        [wallet.id],
+      );
+      assert.deepEqual(
+        statuses.map((row) => [row.fingerprint, row.status]).sort(),
+        [
+          [bankFingerprint(monday), "SUPERSEDED"],
+          [bankFingerprint(tuesday), "PDNG"],
+        ].sort(),
+      );
+    },
+  );
+  await check(
+    "an explicit receipt choice on a pending payment survives settlement over merchant history",
+    async () => {
+      const { setReceiptRequirements } =
+        await import("../src/server/receipt-requirements");
+      const [wallet] = await query(
+        "INSERT INTO accounts(identification_hash,name,currency) VALUES('taxi-wallet','Taxi wallet','EUR') RETURNING id",
+      );
+      await transaction((db) =>
+        importBankTransactions(
+          wallet.id,
+          [
+            {
+              ...bank("taxi-history", "8.00", "TEST TAXI"),
+              booking_date: "2026-09-20",
+            },
+          ],
+          db,
+        ),
+      );
+      const [history] = await query(
+        "SELECT id FROM transactions WHERE source_key='ref:taxi-history'",
+      );
+      await transaction((db) => setReceiptRequirements([history.id], true, db));
+      const pending = pendingBank("TEST TAXI", "7.00", "2026-10-10");
+      await transaction((db) =>
+        importBankTransactions(wallet.id, [pending], db),
+      );
+      const [row] = await query(
+        "SELECT id,receipt_not_required FROM transactions WHERE account_id=$1 AND fingerprint=$2",
+        [wallet.id, bankFingerprint(pending)],
+      );
+      assert.equal(row.receipt_not_required, true);
+      await transaction((db) => setReceiptRequirements([row.id], false, db));
+      await transaction((db) =>
+        importBankTransactions(
+          wallet.id,
+          [
+            {
+              ...bank("taxi-booked", "7.00", "TEST TAXI"),
+              booking_date: "2026-10-11",
+            },
+          ],
+          db,
+        ),
+      );
+      const [booked] = await query(
+        "SELECT receipt_not_required FROM transactions WHERE source_key='ref:taxi-booked'",
+      );
+      assert.equal(booked.receipt_not_required, false);
+    },
+  );
+  await check(
+    "recording cash again tops up the receipt's cash payment, which is removed with its link",
+    async () => {
+      const { recordCashPayment, unlinkReceipt, deleteReceipt } =
+        await import("../src/server/receipts");
+      const receipt = await storeReceipt(
+        Buffer.from(receiptText("Rimi", "CASH-TOPUP-1", "05.10.2026")),
+        "cash-topup.txt",
+      );
+      await processReceipt(receipt.id);
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [
+            {
+              ...bank("cash-split-card", "2.00", "Card only shop"),
+              booking_date: "2026-10-05",
+            },
+          ],
+          db,
+        ),
+      );
+      const [card] = await query(
+        "SELECT id FROM transactions WHERE source_key='ref:cash-split-card'",
+      );
+      await transaction((db) =>
+        linkReceipt(receipt.id, card.id, 200, false, db),
+      );
+      await transaction((db) => recordCashPayment(receipt.id, db));
+      const cash = async () =>
+        (
+          await query(
+            "SELECT t.id,t.amount,p.amount AS linked FROM transactions t LEFT JOIN receipt_payments p ON p.transaction_id=t.id WHERE t.source_key=$1",
+            [`receipt:${receipt.id}`],
+          )
+        )[0];
+      assert.deepEqual(
+        { amount: (await cash()).amount, linked: (await cash()).linked },
+        { amount: -310, linked: 310 },
+      );
+      await transaction((db) => unlinkReceipt(receipt.id, card.id, db));
+      await transaction((db) => recordCashPayment(receipt.id, db));
+      assert.deepEqual(
+        { amount: (await cash()).amount, linked: (await cash()).linked },
+        { amount: -510, linked: 510 },
+      );
+      const cashId = (await cash()).id;
+      await transaction((db) => unlinkReceipt(receipt.id, cashId, db));
+      assert.equal(await cash(), undefined);
+      // Deleting the receipt keeps a recorded cash payment as spending.
+      await transaction((db) => recordCashPayment(receipt.id, db));
+      const kept = (await cash()).id;
+      await deleteReceipt(receipt.id);
+      assert.equal(
+        (await query("SELECT amount FROM transactions WHERE id=$1", [kept]))[0]
+          .amount,
+        -510,
+      );
+    },
+  );
+  await check(
+    "the most recent of a rule and a remembered similar category wins, and remembered ones can be deleted",
+    async () => {
+      const {
+        saveSimilarCategoryRule,
+        similarCategoryRules,
+        deleteSimilarCategoryRule,
+      } = await import("../src/server/similar-transactions");
+      const entry = {
+        merchant: "TEST STREAMING",
+        kind: "expense",
+        currency: "EUR",
+      };
+      await transaction((db) =>
+        saveSimilarCategoryRule(entry, "", "household", db),
+      );
+      await query(
+        "UPDATE similar_category_rules SET updated_at=now()-interval '1 day' WHERE merchant=$1",
+        ["test streaming"],
+      );
+      const [rule] = await query(
+        "INSERT INTO rules(field,pattern,category_id) VALUES('description','TEST PRIME VIDEO','subscriptions') RETURNING id",
+      );
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [
+            {
+              ...bank("streaming-1", "8.99", "TEST STREAMING"),
+              remittance_information: ["TEST PRIME VIDEO monthly"],
+            },
+          ],
+          db,
+        ),
+      );
+      const category = async () =>
+        (
+          await query(
+            "SELECT a.category_id FROM allocations a JOIN transactions t ON t.id=a.transaction_id WHERE t.source_key='ref:streaming-1'",
+          )
+        ).map((row) => row.category_id);
+      assert.deepEqual(await category(), ["subscriptions"]);
+      // Remembering the category again makes it the most recent instruction.
+      await transaction(async (db) => {
+        await saveSimilarCategoryRule(entry, "", "household", db);
+        await reclassify(db);
+      });
+      assert.deepEqual(await category(), ["household"]);
+      const remembered = (await similarCategoryRules()).find(
+        (row) => row.merchant === "test streaming",
+      );
+      assert.equal(remembered?.category_name, "Household supplies");
+      await transaction(async (db) => {
+        assert.equal(
+          await deleteSimilarCategoryRule(
+            {
+              merchant: "test streaming",
+              pattern: "",
+              kind: "expense",
+              currency: "EUR",
+            },
+            db,
+          ),
+          1,
+        );
+        await reclassify(db);
+      });
+      assert.deepEqual(await category(), ["subscriptions"]);
+      await query("DELETE FROM rules WHERE id=$1", [rule.id]);
+      await reclassify();
+    },
+  );
+  await check(
+    "retailer receipts that disagree with the purchase history wait in Review, and skipped ones are retried after an earlier start date",
+    async () => {
+      const receipt = await storeReceipt(
+        Buffer.from(receiptText("Rimi", "HISTORY-TOTAL-1")),
+        "history-total.txt",
+        "rimi",
+        "lidl",
+        undefined,
+        999,
+      );
+      await processReceipt(receipt.id);
+      const [row] = await query(
+        "SELECT status,issues FROM receipts WHERE id=$1",
+        [receipt.id],
+      );
+      assert.equal(row.status, "review");
+      assert.ok(
+        row.issues.some((issue: string) => issue.includes("purchase history")),
+      );
+      const start = await importStartDate();
+      await query(
+        "INSERT INTO retailer_receipts(retailer,account_key,external_id,receipt_id) VALUES('lidl','test-account','skipped-old',NULL)",
+      );
+      await saveImportStartDate("2025-12-01");
+      assert.equal(
+        (
+          await query(
+            "SELECT count(*)::int AS n FROM retailer_receipts WHERE external_id='skipped-old'",
+          )
+        )[0].n,
+        0,
+      );
+      await saveImportStartDate(start);
+    },
+  );
+  await check(
+    "filtered transaction totals count booked payments and a category's share of splits",
+    async () => {
+      const { transactionList } = await import("../src/server/reporting");
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [
+            {
+              ...bank("split-total", "5.10", "TEST SPLIT SHOP"),
+              booking_date: "2026-10-07",
+            },
+            pendingBank("TEST SPLIT SHOP", "9.00", "2026-10-08"),
+          ],
+          db,
+        ),
+      );
+      const [split] = await query(
+        "SELECT id FROM transactions WHERE source_key='ref:split-total'",
+      );
+      await transaction(async (db) => {
+        await db.query("UPDATE transactions SET manual=true WHERE id=$1", [
+          split.id,
+        ]);
+        await db.query("DELETE FROM allocations WHERE transaction_id=$1", [
+          split.id,
+        ]);
+        await db.query(
+          "INSERT INTO allocations(transaction_id,category_id,amount,source) VALUES($1,'groceries',300,'manual'),($1,'household',210,'manual')",
+          [split.id],
+        );
+      });
+      const list = await transactionList(
+        new URLSearchParams({
+          currency: "EUR",
+          from: "2026-10-01",
+          to: "2026-10-31",
+          search: "TEST SPLIT SHOP",
+        }),
+      );
+      assert.equal(list.count, 2);
+      assert.equal(list.bookedTotal, -510);
+      assert.equal(list.categoryTotal, null);
+      const groceries = await transactionList(
+        new URLSearchParams({
+          currency: "EUR",
+          from: "2026-10-01",
+          to: "2026-10-31",
+          search: "TEST SPLIT SHOP",
+          category: "groceries",
+        }),
+      );
+      assert.equal(groceries.categoryTotal, 300);
+    },
+  );
+  await check(
+    "receipts paid in cash do not auto-match a card payment",
+    async () => {
+      await transaction((db) =>
+        importBankTransactions(
+          account.id,
+          [
+            {
+              ...bank("cash-tender-card", "5.10", "Rimi"),
+              booking_date: "2026-10-12",
+            },
+          ],
+          db,
+        ),
+      );
+      const receipt = await storeReceipt(
+        Buffer.from(
+          receiptText("Rimi", "CASH-TENDER-1", "12.10.2026").replace(
+            "Pangakaart 5,10",
+            "Sularaha 5,10",
+          ),
+        ),
+        "cash-tender.txt",
+      );
+      await processReceipt(receipt.id);
+      assert.deepEqual(
+        (
+          await query(
+            "SELECT status,cash_amount,card_amount FROM receipts WHERE id=$1",
+            [receipt.id],
+          )
+        )[0],
+        { status: "ready", cash_amount: 510, card_amount: null },
+      );
+      assert.equal(
+        (
+          await query(
+            "SELECT count(*)::int AS n FROM receipt_payments WHERE receipt_id=$1",
+            [receipt.id],
+          )
+        )[0].n,
+        0,
+      );
+      await query(
+        "UPDATE receipts SET cash_amount=NULL,card_amount=510 WHERE id=$1",
+        [receipt.id],
+      );
+      await transaction((db) => autoMatchReceipt(receipt.id, db));
+      assert.equal(
+        (
+          await query(
+            "SELECT count(*)::int AS n FROM receipt_payments WHERE receipt_id=$1",
+            [receipt.id],
+          )
+        )[0].n,
+        1,
+      );
+    },
+  );
+  await check(
+    "sign-in limits cap forged client addresses, reset on success, and upgrade old password hashes",
+    async () => {
+      const { NextRequest } = await import("next/server");
+      const { withLoginLimit, login } = await import("../src/server/auth");
+      const { scryptSync } = await import("node:crypto");
+      const request = (address: string) =>
+        new NextRequest("http://127.0.0.1:4317/api/auth/login", {
+          headers: { "X-Forwarded-For": address },
+        });
+      const attempt = (address: string, password: string) =>
+        withLoginLimit(request(address), () => login(password));
+      const salt = "00112233445566778899aabbccddeeff";
+      await query(
+        "INSERT INTO owner(id,name,password_hash) VALUES(1,'Hash test',$1)",
+        [`${salt}:${scryptSync("legacy password", salt, 64).toString("hex")}`],
+      );
+      const trust = config.trustProxy;
+      config.trustProxy = true;
+      try {
+        await query("DELETE FROM auth_attempts");
+        for (let i = 0; i < 10; i++)
+          await assert.rejects(attempt("192.0.2.1", "wrong"), /Incorrect/);
+        // Rejected requests from a limited client do not fill the shared total.
+        for (let i = 0; i < 60; i++)
+          await assert.rejects(attempt("192.0.2.1", "wrong"), /Too many/);
+        // Forged addresses still run into the shared ceiling of failed guesses.
+        for (let i = 0; i < 40; i++)
+          await assert.rejects(
+            attempt(`198.51.100.${i}`, "wrong"),
+            /Incorrect/,
+          );
+        await assert.rejects(
+          attempt("198.51.100.250", "legacy password"),
+          /Too many/,
+        );
+        await query("DELETE FROM auth_attempts WHERE key=$1", [
+          digest("login:failed"),
+        ]);
+        await assert.rejects(attempt("203.0.113.5", "wrong"), /Incorrect/);
+        await attempt("203.0.113.5", "legacy password");
+        assert.equal(
+          (
+            await query("SELECT 1 FROM auth_attempts WHERE key=$1", [
+              digest("login:203.0.113.5"),
+            ])
+          ).length,
+          0,
+        );
+        const [owner] = await query("SELECT password_hash FROM owner");
+        assert.match(owner.password_hash, /^scrypt\$131072\$8\$1\$/);
+        await login("legacy password");
+      } finally {
+        config.trustProxy = trust;
+        await query("DELETE FROM auth_attempts");
+        await query("DELETE FROM owner WHERE id=1");
+      }
+    },
+  );
+  await check(
+    "an explicit receipt choice survives a sync where the bank stops listing the pending payment",
+    async () => {
+      const { setReceiptRequirements } =
+        await import("../src/server/receipt-requirements");
+      const [connection] = await query(
+        "INSERT INTO bank_connections(bank_name,country,session_cipher,valid_until) VALUES('Swedbank','EE',$1,now()+interval '30 days') RETURNING id",
+        [encrypt({ id: "receipt-choice-sync" })],
+      );
+      const [wallet] = await query(
+        "INSERT INTO accounts(connection_id,identification_hash,provider_uid,name,currency,last_sync_at) VALUES($1,'ride-wallet','ride-wallet','Ride wallet','EUR','2026-10-12') RETURNING id",
+        [connection.id],
+      );
+      await transaction((db) =>
+        importBankTransactions(
+          wallet.id,
+          [
+            {
+              ...bank("ride-history", "6.00", "TEST RIDES"),
+              booking_date: "2026-09-25",
+            },
+          ],
+          db,
+        ),
+      );
+      const [history] = await query(
+        "SELECT id FROM transactions WHERE source_key='ref:ride-history'",
+      );
+      await transaction((db) => setReceiptRequirements([history.id], true, db));
+      const pending = pendingBank("TEST RIDES", "4.50", "2026-10-13");
+      await transaction((db) =>
+        importBankTransactions(wallet.id, [pending], db),
+      );
+      const [row] = await query(
+        "SELECT id FROM transactions WHERE account_id=$1 AND fingerprint=$2",
+        [wallet.id, bankFingerprint(pending)],
+      );
+      await transaction((db) => setReceiptRequirements([row.id], false, db));
+      const original = globalThis.fetch;
+      try {
+        globalThis.fetch = async (input) =>
+          Response.json(
+            new URL(String(input)).pathname.endsWith("/balances")
+              ? { balances: [] }
+              : {
+                  transactions: [
+                    {
+                      ...bank("ride-booked", "4.50", "TEST RIDES"),
+                      booking_date: "2026-10-14",
+                    },
+                  ],
+                },
+          );
+        await syncBank(connection.id);
+      } finally {
+        globalThis.fetch = original;
+      }
+      const [booked] = await query(
+        "SELECT receipt_not_required FROM transactions WHERE source_key='ref:ride-booked'",
+      );
+      assert.equal(booked.receipt_not_required, false);
+      assert.equal(
+        (
+          await query("SELECT status FROM transactions WHERE id=$1", [row.id])
+        )[0].status,
+        "SUPERSEDED",
       );
     },
   );
